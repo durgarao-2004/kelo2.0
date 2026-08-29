@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * KELO design tokens — Notion-clean + Apple-premium.
+ * Neutral ink surfaces with a single refined indigo accent.
+ * HSL channels so Tailwind can apply opacity via `hsl(var(--x) / <alpha>)`.
+ */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 4%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 4%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 4%;
+
+  --primary: 243 75% 59%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 240 5% 96%;
+  --secondary-foreground: 240 6% 10%;
+
+  --muted: 240 5% 96%;
+  --muted-foreground: 240 4% 46%;
+
+  --accent: 243 75% 96%;
+  --accent-foreground: 243 75% 40%;
+
+  --success: 142 71% 45%;
+  --warning: 38 92% 50%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 240 6% 90%;
+  --input: 240 6% 90%;
+  --ring: 243 75% 59%;
+
+  --radius: 0.75rem;
+}
+
+.dark {
+  --background: 240 10% 4%;
+  --foreground: 0 0% 98%;
+
+  --card: 240 9% 7%;
+  --card-foreground: 0 0% 98%;
+
+  --popover: 240 9% 7%;
+  --popover-foreground: 0 0% 98%;
+
+  --primary: 243 75% 66%;
+  --primary-foreground: 240 10% 4%;
+
+  --secondary: 240 5% 13%;
+  --secondary-foreground: 0 0% 98%;
+
+  --muted: 240 5% 13%;
+  --muted-foreground: 240 5% 65%;
+
+  --accent: 243 40% 18%;
+  --accent-foreground: 243 75% 82%;
+
+  --success: 142 60% 50%;
+  --warning: 38 92% 55%;
+  --destructive: 0 63% 50%;
+  --destructive-foreground: 0 0% 98%;
+
+  --border: 240 5% 16%;
+  --input: 240 5% 18%;
+  --ring: 243 75% 66%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-feature-settings:
+    "rlig" 1,
+    "calt" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

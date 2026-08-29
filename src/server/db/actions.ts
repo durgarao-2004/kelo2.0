@@ -1,0 +1,159 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { requireUser } from "@/server/auth/current-user";
+import { parseHHMM } from "@/lib/utils/time";
+import {
+  createSubject,
+  updateSubject,
+  deleteSubject,
+} from "./subjects";
+import {
+  createScheduleEntry,
+  updateScheduleEntry,
+  deleteScheduleEntry,
+} from "./schedule";
+import { markAttendance } from "./attendance";
+
+export interface ActionState {
+  error?: string;
+  ok?: boolean;
+}
+
+const REVALIDATE = ["/dashboard", "/timetable", "/attendance", "/settings"];
+function revalidateAll() {
+  for (const p of REVALIDATE) revalidatePath(p);
+}
+
+// ---------------- Subjects ----------------
+export async function createSubjectAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  const name = String(formData.get("name") ?? "").trim();
+  const color = String(formData.get("color") ?? "#4f46e5");
+  const target = Number(formData.get("target_attendance") ?? 75);
+  const yearRaw = String(formData.get("year") ?? "").trim();
+  const semester = String(formData.get("semester") ?? "").trim() || null;
+
+  const { error } = await createSubject(user.id, {
+    name,
+    color,
+    target_attendance: Number.isFinite(target) ? target : 75,
+    year: yearRaw ? Number(yearRaw) : null,
+    semester,
+  });
+  if (error) return { error };
+  revalidateAll();
+  return { ok: true };
+}
+
+export async function updateSubjectAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  const id = String(formData.get("id") ?? "");
+  const target = Number(formData.get("target_attendance") ?? 75);
+  const { error } = await updateSubject(user.id, id, {
+    name: String(formData.get("name") ?? "").trim(),
+    color: String(formData.get("color") ?? "#4f46e5"),
+    target_attendance: Number.isFinite(target) ? target : 75,
+  });
+  if (error) return { error };
+  revalidateAll();
+  return { ok: true };
+}
+
+export async function deleteSubjectAction(formData: FormData): Promise<void> {
+  const user = await requireUser();
+  await deleteSubject(user.id, String(formData.get("id") ?? ""));
+  revalidateAll();
+}
+
+// ---------------- Schedule ----------------
+export async function createScheduleAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  const subject_id = String(formData.get("subject_id") ?? "");
+  const day_of_week = Number(formData.get("day_of_week") ?? -1);
+  const start = parseHHMM(String(formData.get("start") ?? ""));
+  const end = parseHHMM(String(formData.get("end") ?? ""));
+  const location = String(formData.get("location") ?? "").trim() || null;
+
+  if (!subject_id) return { error: "Pick a subject." };
+  if (start === null || end === null) return { error: "Enter valid times." };
+
+  const { error } = await createScheduleEntry(user.id, {
+    subject_id,
+    day_of_week,
+    start_minute: start,
+    end_minute: end,
+    location,
+  });
+  if (error) return { error };
+  revalidateAll();
+  return { ok: true };
+}
+
+export async function updateScheduleAction(
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const user = await requireUser();
+  const id = String(formData.get("id") ?? "");
+  const subject_id = String(formData.get("subject_id") ?? "");
+  const day_of_week = Number(formData.get("day_of_week") ?? -1);
+  const start = parseHHMM(String(formData.get("start") ?? ""));
+  const end = parseHHMM(String(formData.get("end") ?? ""));
+  const location = String(formData.get("location") ?? "").trim() || null;
+
+  if (!subject_id) return { error: "Pick a subject." };
+  if (start === null || end === null) return { error: "Enter valid times." };
+
+  const { error } = await updateScheduleEntry(user.id, id, {
+    subject_id,
+    day_of_week,
+    start_minute: start,
+    end_minute: end,
+    location,
+  });
+  if (error) return { error };
+  revalidateAll();
+  return { ok: true };
+}
+
+export async function deleteScheduleAction(formData: FormData): Promise<void> {
+  const user = await requireUser();
+  await deleteScheduleEntry(user.id, String(formData.get("id") ?? ""));
+  revalidateAll();
+}
+
+// ---------------- Attendance ----------------
+export async function markAttendanceAction(
+  formData: FormData,
+): Promise<void> {
+  const user = await requireUser();
+  const subject_id = String(formData.get("subject_id") ?? "");
+  const status = String(formData.get("status") ?? "") as
+    | "attended"
+    | "missed"
+    | "cancelled";
+  const occurred_on =
+    String(formData.get("occurred_on") ?? "") ||
+    new Date().toISOString().slice(0, 10);
+  const scheduleRaw = String(formData.get("schedule_entry_id") ?? "");
+  if (!subject_id || !["attended", "missed", "cancelled"].includes(status)) {
+    return;
+  }
+  await markAttendance(user.id, {
+    subject_id,
+    schedule_entry_id: scheduleRaw || null,
+    occurred_on,
+    status,
+  });
+  revalidateAll();
+}
