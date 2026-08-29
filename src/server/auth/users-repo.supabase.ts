@@ -69,5 +69,9 @@ export function supabaseUsersRepo(): UsersRepo {
     async setSessionVersion(id, version) {
       await db.from("users").update({ session_version: version }).eq("id", id);
     },
+
+    async setPinHash(id, pinHash) {
+      await db.from("users").update({ pin_hash: pinHash }).eq("id", id);
+    },
   };
 }

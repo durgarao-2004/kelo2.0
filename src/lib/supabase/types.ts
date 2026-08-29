@@ -13,12 +13,14 @@ export type Json =
 
 export type LectureStatus =
   | "recording"
-  | "processing"
   | "uploading"
+  | "uploaded"
   | "transcribing"
-  | "summarizing"
+  | "transcribed"
+  | "analyzing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "recoverable";
 
 export type AttendanceStatus = "attended" | "missed" | "cancelled";
 
@@ -261,6 +263,26 @@ export interface Database {
           updated_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["user_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      pin_recovery_tokens: {
+        Row: {
+          id: string;
+          user_id: string;
+          token_hash: string;
+          expires_at: string;
+          used_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          token_hash: string;
+          expires_at: string;
+          used_at?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["pin_recovery_tokens"]["Insert"]>;
         Relationships: [];
       };
       lecture_chunks: {

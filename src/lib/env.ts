@@ -24,10 +24,14 @@ const serverEnvSchema = z.object({
   OPENROUTER_API_KEY: z.string().optional(),
 
   // Optional model overrides with sane defaults.
-  GEMINI_MODEL: z.string().default("gemini-1.5-flash"),
+  GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   GROK_MODEL: z.string().default("grok-2-latest"),
   OPENROUTER_MODEL: z.string().default("meta-llama/llama-3.1-70b-instruct"),
+
+  // Resend (PIN recovery email delivery only — never used for login).
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM_EMAIL: z.string().default("KELO <onboarding@resend.dev>"),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -69,6 +73,7 @@ export function getServerEnvDiagnostics() {
       openai: Boolean(e.OPENAI_API_KEY),
       openrouter: Boolean(e.OPENROUTER_API_KEY),
     },
+    resend: Boolean(e.RESEND_API_KEY),
   };
 }
 

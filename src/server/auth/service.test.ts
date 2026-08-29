@@ -46,6 +46,10 @@ function makeMemoryRepo() {
       const u = byId.get(id);
       if (u) u.session_version = v;
     },
+    async setPinHash(id, pinHash) {
+      const u = byId.get(id);
+      if (u) u.pin_hash = pinHash;
+    },
   };
 
   return { repo, byId };

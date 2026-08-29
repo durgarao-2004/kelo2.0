@@ -27,4 +27,5 @@ export interface UsersRepo {
   ensureSettings(id: string): Promise<void>;
   getSessionVersion(id: string): Promise<number | null>;
   setSessionVersion(id: string, version: number): Promise<void>;
+  setPinHash(id: string, pinHash: string): Promise<void>;
 }

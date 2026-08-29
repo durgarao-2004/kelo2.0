@@ -3,7 +3,8 @@ import { processLecture } from "@/server/recordings/process";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Transcription + analysis of a full lecture can take a few minutes.
+export const maxDuration = 300;
 
 /**
  * Run the post-recording pipeline (transcribe → analyze → store → Drive → index)

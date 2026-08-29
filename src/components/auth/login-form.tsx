@@ -34,12 +34,22 @@ export function LoginForm({ next }: { next?: string }) {
         />
       </div>
 
-      <PinInput
-        value={pin}
-        onChange={setPin}
-        label="6-digit PIN"
-        aria-invalid={Boolean(state.error)}
-      />
+      <div className="space-y-1.5">
+        <PinInput
+          value={pin}
+          onChange={setPin}
+          label="6-digit PIN"
+          aria-invalid={Boolean(state.error)}
+        />
+        <div className="text-right">
+          <Link
+            href="/forgot-pin"
+            className="text-xs font-medium text-muted-foreground hover:text-primary hover:underline"
+          >
+            Forgot PIN?
+          </Link>
+        </div>
+      </div>
 
       {state.error ? (
         <p

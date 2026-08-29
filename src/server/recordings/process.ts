@@ -61,9 +61,10 @@ function renderSummaryMarkdown(title: string, a: LectureAnalysis): string {
 /**
  * Full post-recording pipeline: download audio → transcribe → analyze →
  * persist transcript + summary → upload text files to Drive → index for RAG.
- * The audio is already safely stored, so a failure here leaves the lecture
- * "completed" (recording saved) with an error note rather than pretending it
- * failed outright.
+ * The audio is already safely stored, so a failure here marks the lecture
+ * "recoverable" (never "completed") with an error note — the recording and
+ * any transcript obtained before the failure are preserved, and the pipeline
+ * is safe to retry from where it left off.
  */
 export async function processLecture(
   userId: string,
@@ -95,8 +96,9 @@ export async function processLecture(
         { lecture_id: lectureId, user_id: userId, content: transcript },
         { onConflict: "lecture_id" },
       );
+    await db.from("lectures").update({ status: "transcribed" }).eq("id", lectureId);
 
-    await db.from("lectures").update({ status: "summarizing" }).eq("id", lectureId);
+    await db.from("lectures").update({ status: "analyzing" }).eq("id", lectureId);
     const analysis = await analyzeLecture(transcript, subject?.name ?? "Lecture");
     await db.from("summaries").upsert(
       {
@@ -154,7 +156,7 @@ export async function processLecture(
     await db
       .from("lectures")
       .update({
-        status: "completed",
+        status: "recoverable",
         error: e instanceof Error ? e.message : "processing_failed",
       })
       .eq("id", lectureId);

@@ -27,8 +27,8 @@ function extFromMime(mime: string): string {
 /**
  * Persist a recorded lecture: ensure the KELO/YEAR/SEMESTER/SUBJECT/Recordings
  * folder exists, upload the audio, and create the lecture row. Lecture status
- * reflects reality at each step (uploading → completed, or failed on error).
- * Transcription/summary are attached later (Phase 8).
+ * reflects reality at each step (uploading → uploaded, or failed on error).
+ * "uploaded" is not "completed" — transcription/analysis still need to run.
  */
 export async function saveRecording(
   input: SaveRecordingInput,
@@ -81,7 +81,7 @@ export async function saveRecording(
     );
     await db
       .from("lectures")
-      .update({ status: "completed", drive_recording_file_id: fileId })
+      .update({ status: "uploaded", drive_recording_file_id: fileId })
       .eq("id", lecture.id);
     return { ok: true, lectureId: lecture.id };
   } catch (e) {
