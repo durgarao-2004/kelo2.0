@@ -26,8 +26,14 @@ export function isRetryableOpenAiStatus(status: number, body: string): boolean {
   return status >= 500;
 }
 
-export function isRetryableGeminiStatus(status: number): boolean {
+/** Generic transient-HTTP-status check: 429 (rate limit) or 5xx. Used for any
+ * provider without a more specific classification (AssemblyAI, Gemini, ...). */
+export function isRetryableHttpStatus(status: number): boolean {
   return status === 429 || status >= 500;
+}
+
+export function isRetryableGeminiStatus(status: number): boolean {
+  return isRetryableHttpStatus(status);
 }
 
 export interface RetryOptions {

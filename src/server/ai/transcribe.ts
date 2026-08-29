@@ -1,18 +1,23 @@
 import "server-only";
 import { getServerEnv } from "@/lib/env";
+import { ProviderError, withRetries, isRetryableHttpStatus } from "@/features/ai/retry";
 import {
-  ProviderError,
-  withRetries,
-  isRetryableOpenAiStatus,
-  isRetryableGeminiStatus,
-} from "@/features/ai/retry";
+  extractUploadUrl,
+  extractJobId,
+  pollUntilDone,
+  transcriptionProviderOrder,
+  type AssemblyAiPollResponse,
+} from "@/features/ai/assemblyai";
 
 export interface TranscriptionResult {
   text: string;
   provider: string;
 }
 
-const REQUEST_TIMEOUT_MS = 90_000;
+const REQUEST_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 90_000;
+const POLL_INTERVAL_MS = 3_000;
+const POLL_TIMEOUT_MS = 4 * 60_000; // 4 minutes
 
 /** fetch() with a hard timeout, since a hung provider must never hang the pipeline. */
 async function fetchWithTimeout(
@@ -34,9 +39,91 @@ async function fetchWithTimeout(
   }
 }
 
-async function whisper(
+// ---------- AssemblyAI (primary) ----------
+
+const ASSEMBLYAI_BASE = "https://api.assemblyai.com/v2";
+
+async function assemblyAiUpload(bytes: ArrayBuffer, apiKey: string): Promise<string> {
+  return withRetries(
+    async () => {
+      const res = await fetchWithTimeout(
+        `${ASSEMBLYAI_BASE}/upload`,
+        {
+          method: "POST",
+          headers: { authorization: apiKey, "content-type": "application/octet-stream" },
+          body: bytes,
+        },
+        UPLOAD_TIMEOUT_MS,
+      );
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new ProviderError(
+          `assemblyai upload ${res.status}: ${detail.slice(0, 200)}`,
+          isRetryableHttpStatus(res.status),
+        );
+      }
+      return extractUploadUrl((await res.json()) as { upload_url?: string });
+    },
+    (e) => e instanceof ProviderError && e.retryable,
+  );
+}
+
+async function assemblyAiCreateJob(uploadUrl: string, apiKey: string): Promise<string> {
+  return withRetries(
+    async () => {
+      const res = await fetchWithTimeout(`${ASSEMBLYAI_BASE}/transcript`, {
+        method: "POST",
+        headers: { authorization: apiKey, "content-type": "application/json" },
+        body: JSON.stringify({ audio_url: uploadUrl }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new ProviderError(
+          `assemblyai transcript-create ${res.status}: ${detail.slice(0, 200)}`,
+          isRetryableHttpStatus(res.status),
+        );
+      }
+      return extractJobId((await res.json()) as { id?: string });
+    },
+    (e) => e instanceof ProviderError && e.retryable,
+  );
+}
+
+async function assemblyAiPollOnce(jobId: string, apiKey: string): Promise<AssemblyAiPollResponse> {
+  return withRetries(
+    async () => {
+      const res = await fetchWithTimeout(`${ASSEMBLYAI_BASE}/transcript/${jobId}`, {
+        headers: { authorization: apiKey },
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        throw new ProviderError(
+          `assemblyai poll ${res.status}: ${detail.slice(0, 200)}`,
+          isRetryableHttpStatus(res.status),
+        );
+      }
+      return (await res.json()) as AssemblyAiPollResponse;
+    },
+    (e) => e instanceof ProviderError && e.retryable,
+  );
+}
+
+async function assemblyAiTranscribe(bytes: ArrayBuffer, apiKey: string): Promise<string> {
+  const uploadUrl = await assemblyAiUpload(bytes, apiKey);
+  const jobId = await assemblyAiCreateJob(uploadUrl, apiKey);
+  return pollUntilDone(() => assemblyAiPollOnce(jobId, apiKey), {
+    intervalMs: POLL_INTERVAL_MS,
+    timeoutMs: POLL_TIMEOUT_MS,
+  });
+}
+
+// ---------- Groq Whisper (fallback) ----------
+// Groq exposes an OpenAI-compatible audio transcription endpoint.
+
+async function groqWhisper(
   bytes: ArrayBuffer,
   mimeType: string,
+  model: string,
   apiKey: string,
 ): Promise<string> {
   return withRetries(
@@ -44,17 +131,21 @@ async function whisper(
       const form = new FormData();
       const ext = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
       form.append("file", new Blob([bytes], { type: mimeType }), `audio.${ext}`);
-      form.append("model", "whisper-1");
-      const res = await fetchWithTimeout("https://api.openai.com/v1/audio/transcriptions", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body: form,
-      });
+      form.append("model", model);
+      const res = await fetchWithTimeout(
+        "https://api.groq.com/openai/v1/audio/transcriptions",
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}` },
+          body: form,
+        },
+        UPLOAD_TIMEOUT_MS,
+      );
       if (!res.ok) {
         const detail = await res.text().catch(() => "");
         throw new ProviderError(
-          `whisper ${res.status}: ${detail.slice(0, 200)}`,
-          isRetryableOpenAiStatus(res.status, detail),
+          `groq-whisper ${res.status}: ${detail.slice(0, 200)}`,
+          isRetryableHttpStatus(res.status),
         );
       }
       const data = (await res.json()) as { text?: string };
@@ -64,85 +155,41 @@ async function whisper(
   );
 }
 
-async function geminiTranscribe(
-  bytes: ArrayBuffer,
-  mimeType: string,
-  model: string,
-  apiKey: string,
-): Promise<string> {
-  const base64 = Buffer.from(bytes).toString("base64");
-  return withRetries(
-    async () => {
-      const res = await fetchWithTimeout(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: "user",
-                parts: [
-                  { text: "Transcribe this lecture audio verbatim. Output only the transcript." },
-                  { inlineData: { mimeType, data: base64 } },
-                ],
-              },
-            ],
-            generationConfig: { temperature: 0 },
-          }),
-        },
-      );
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        throw new ProviderError(
-          `gemini-transcribe ${res.status}: ${detail.slice(0, 200)}`,
-          isRetryableGeminiStatus(res.status),
-        );
-      }
-      const data = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      return (
-        data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? ""
-      );
-    },
-    (e) => e instanceof ProviderError && e.retryable,
-  );
-}
-
 /**
- * Transcribe audio using the best available provider (OpenAI Whisper first,
- * then Gemini). Each provider gets a bounded timeout and retries only on
- * transient errors (rate limits, 5xx) — permanent failures (bad model,
- * expired key, exhausted quota) fail fast to the next provider. Throws if
- * none is configured or all fail; never returns a fabricated transcript.
+ * Transcribe audio using the best available provider: AssemblyAI (primary,
+ * upload → job → poll) with Groq Whisper as fallback. Gemini/OpenAI are
+ * NEVER used here — they're reserved for lecture analysis. Throws a precise,
+ * actionable error if no provider is configured or all fail; never returns a
+ * fabricated transcript.
  */
 export async function transcribeAudio(
   bytes: ArrayBuffer,
   mimeType: string,
 ): Promise<TranscriptionResult> {
   const env = getServerEnv();
-  const errors: string[] = [];
+  const order = transcriptionProviderOrder({
+    assemblyai: Boolean(env.ASSEMBLYAI_API_KEY),
+    groq: Boolean(env.GROQ_API_KEY),
+  });
 
-  if (env.OPENAI_API_KEY) {
+  if (order.length === 0) {
+    throw new Error(
+      "no_transcription_provider: set ASSEMBLYAI_API_KEY (primary) and/or GROQ_API_KEY (fallback) to enable transcription.",
+    );
+  }
+
+  const errors: string[] = [];
+  for (const provider of order) {
     try {
-      const text = await whisper(bytes, mimeType, env.OPENAI_API_KEY);
-      if (text.trim()) return { text, provider: "openai-whisper" };
-      errors.push("openai-whisper: empty transcript");
+      const text =
+        provider === "assemblyai"
+          ? await assemblyAiTranscribe(bytes, env.ASSEMBLYAI_API_KEY!)
+          : await groqWhisper(bytes, mimeType, env.GROQ_MODEL, env.GROQ_API_KEY!);
+      if (text.trim()) return { text, provider };
+      errors.push(`${provider}: empty transcript`);
     } catch (e) {
-      errors.push(e instanceof Error ? e.message : "whisper failed");
+      errors.push(e instanceof Error ? e.message : `${provider} failed`);
     }
   }
-  if (env.GEMINI_API_KEY) {
-    try {
-      const text = await geminiTranscribe(bytes, mimeType, env.GEMINI_MODEL, env.GEMINI_API_KEY);
-      if (text.trim()) return { text, provider: "gemini" };
-      errors.push("gemini: empty transcript");
-    } catch (e) {
-      errors.push(e instanceof Error ? e.message : "gemini failed");
-    }
-  }
-  throw new Error(
-    errors.length ? `transcription failed: ${errors.join("; ")}` : "no_transcription_provider",
-  );
+  throw new Error(`transcription failed: ${errors.join("; ")}`);
 }

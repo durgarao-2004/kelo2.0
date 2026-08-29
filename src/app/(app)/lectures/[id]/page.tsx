@@ -5,6 +5,7 @@ import { ArrowLeft, FileText, HardDrive } from "lucide-react";
 import { requireUser } from "@/server/auth/current-user";
 import { getLectureDetail } from "@/server/db/lectures";
 import { formatDuration } from "@/lib/utils/time";
+import { toUserFacingProcessingError } from "@/lib/errors/user-facing";
 import { StatusBadge } from "@/components/lectures/status-badge";
 import { ProcessButton } from "@/components/lectures/process-button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -105,7 +106,7 @@ export default async function LectureDetailPage({
 
       {lecture.error ? (
         <div className="mb-4 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm">
-          Processing note: {lecture.error}
+          {toUserFacingProcessingError(lecture.error)}
         </div>
       ) : null}
 

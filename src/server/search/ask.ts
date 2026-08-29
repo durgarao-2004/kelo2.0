@@ -1,6 +1,7 @@
 import "server-only";
 import { retrieveChunks, type RetrievedChunk } from "./retrieve";
 import { answerWithContext } from "@/server/ai/tasks";
+import { toUserFacingAiError } from "@/lib/errors/user-facing";
 
 export interface AskSource {
   lectureId: string;
@@ -63,11 +64,12 @@ export async function askLectures(
     );
     return { answer, sources: uniqueSources(chunks), provider, error: null };
   } catch (e) {
+    console.error("askLectures failed:", e instanceof Error ? e.message : e);
     return {
       answer: "",
       sources: uniqueSources(chunks),
       provider: null,
-      error: e instanceof Error ? e.message : "AI request failed.",
+      error: toUserFacingAiError(e instanceof Error ? e.message : null),
     };
   }
 }
