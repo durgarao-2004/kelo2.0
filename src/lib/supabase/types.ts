@@ -25,6 +25,8 @@ export type LectureStatus =
 
 export type AttendanceStatus = "attended" | "missed" | "cancelled";
 
+export type TextbookMatchStatus = "not_configured" | "pending" | "unverified" | "verified";
+
 export type RecordingSessionStatus =
   | "recording"
   | "finalizing"
@@ -342,6 +344,34 @@ export interface Database {
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["recording_chunk_meta"]["Insert"]>;
+        Relationships: [];
+      };
+      lecture_concepts: {
+        Row: {
+          id: string;
+          lecture_id: string;
+          user_id: string;
+          subject_id: string | null;
+          concept: string;
+          lecture_connection: string | null;
+          textbook_subject_key: string | null;
+          textbook_status: TextbookMatchStatus;
+          textbook_explanation: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          lecture_id: string;
+          user_id: string;
+          subject_id?: string | null;
+          concept: string;
+          lecture_connection?: string | null;
+          textbook_subject_key?: string | null;
+          textbook_status?: TextbookMatchStatus;
+          textbook_explanation?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["lecture_concepts"]["Insert"]>;
         Relationships: [];
       };
       lecture_chunks: {

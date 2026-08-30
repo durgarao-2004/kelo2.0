@@ -14,6 +14,7 @@ import { cleanTranscript } from "@/features/ai/transcript-clean";
 import { asStringArray, asFlashcards, asDefinitions, asNoteSections } from "@/features/ai/parse";
 import { resumeStage, canClaim, claimStatusFor } from "@/features/ai/pipeline-stage";
 import { indexLectureChunks } from "@/server/search/index-lecture";
+import { groundLectureConcepts } from "@/server/knowledge/ground-concepts";
 import type { Database, Json } from "@/lib/supabase/types";
 
 // Comfortably longer than the pipeline's own transcription/analysis budgets
@@ -283,6 +284,21 @@ export async function processLecture(
       transcript,
       summary: analysis.summary,
     });
+
+    try {
+      await groundLectureConcepts({
+        lectureId,
+        userId,
+        subjectId: subject?.id ?? null,
+        subjectName: subject?.name ?? "",
+        transcript,
+        concepts: analysis.keyConcepts,
+      });
+    } catch {
+      // Textbook grounding is a best-effort enrichment layered on top of an
+      // already-successful lecture — never let it downgrade a completed
+      // lecture back to "recoverable".
+    }
 
     return { ok: true };
   } catch (e) {

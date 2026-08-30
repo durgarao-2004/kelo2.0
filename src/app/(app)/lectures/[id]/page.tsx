@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, FileText, HardDrive } from "lucide-react";
+import { ArrowLeft, FileText, HardDrive, BookOpen } from "lucide-react";
 import { requireUser } from "@/server/auth/current-user";
 import { getLectureDetail } from "@/server/db/lectures";
 import { formatDuration } from "@/lib/utils/time";
@@ -9,6 +9,7 @@ import { toUserFacingProcessingError } from "@/lib/errors/user-facing";
 import { StatusBadge } from "@/components/lectures/status-badge";
 import { ProcessButton } from "@/components/lectures/process-button";
 import { Card, CardContent } from "@/components/ui/card";
+import { getTextbookByKey, formatTextbookCitation } from "@/config/textbooks";
 
 export const metadata: Metadata = { title: "Lecture" };
 export const dynamic = "force-dynamic";
@@ -83,7 +84,16 @@ export default async function LectureDetailPage({
   const { data } = await getLectureDetail(user.id, id);
   if (!data) notFound();
 
-  const { lecture, transcript, summary } = data;
+  const { lecture, transcript, summary, concepts: textbookConcepts } = data;
+  const verifiedConcepts = textbookConcepts
+    .filter((c) => c.textbook_status === "verified" && c.textbook_subject_key)
+    .map((c) => ({
+      concept: c.concept,
+      lectureConnection: c.lecture_connection,
+      explanation: c.textbook_explanation,
+      textbook: getTextbookByKey(c.textbook_subject_key!),
+    }))
+    .filter((c) => c.textbook !== null);
   const revision = (summary?.revision ?? {}) as {
     examQuestions?: unknown;
     flashcards?: unknown;
@@ -224,6 +234,41 @@ export default async function LectureDetailPage({
               <Section title="Topics" items={asStringList(summary?.topics)} />
             </CardContent>
           </Card>
+
+          {verifiedConcepts.length > 0 ? (
+            <Card>
+              <CardContent className="space-y-5">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                  <BookOpen className="h-4 w-4" /> Academic reference
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Textbook-grounded explanations, kept separate from what your professor
+                  actually said — the lecture and the textbook aren&apos;t always identical.
+                </p>
+                <div className="space-y-4">
+                  {verifiedConcepts.map((c, i) => (
+                    <div key={i} className="rounded-xl border border-border p-4">
+                      <p className="font-medium">{c.concept}</p>
+                      <p className="mt-1 text-xs font-medium text-primary">
+                        {formatTextbookCitation(c.textbook!)}
+                      </p>
+                      {c.explanation ? (
+                        <p className="mt-2 text-sm leading-relaxed text-foreground/90">
+                          {c.explanation}
+                        </p>
+                      ) : null}
+                      {c.lectureConnection ? (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          <span className="font-medium text-foreground">From your lecture: </span>
+                          {c.lectureConnection}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
 
           {(asStringList(revision.examQuestions).length > 0 ||
             flashcards.length > 0 ||

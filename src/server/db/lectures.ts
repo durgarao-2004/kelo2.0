@@ -42,11 +42,16 @@ export async function getLecture(
 }
 
 export type SummaryRow = Database["public"]["Tables"]["summaries"]["Row"];
+export type LectureConceptRow = Database["public"]["Tables"]["lecture_concepts"]["Row"];
 
 export interface LectureDetail {
   lecture: LectureWithSubject;
   transcript: string | null;
   summary: SummaryRow | null;
+  /** Textbook-grounded concepts, if any were matched — kept separate from
+   * `summary` so lecture content and academic-reference content are never
+   * conflated in the UI. */
+  concepts: LectureConceptRow[];
 }
 
 export async function getLectureDetail(
@@ -63,9 +68,15 @@ export async function getLectureDetail(
   if (error) return { data: null, error: error.message };
   if (!lecture) return { data: null, error: null };
 
-  const [{ data: transcript }, { data: summary }] = await Promise.all([
+  const [{ data: transcript }, { data: summary }, { data: concepts }] = await Promise.all([
     db.from("transcripts").select("content").eq("lecture_id", id).maybeSingle(),
     db.from("summaries").select("*").eq("lecture_id", id).maybeSingle(),
+    db
+      .from("lecture_concepts")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("lecture_id", id)
+      .order("created_at", { ascending: true }),
   ]);
 
   return {
@@ -73,6 +84,7 @@ export async function getLectureDetail(
       lecture: lecture as unknown as LectureWithSubject,
       transcript: transcript?.content ?? null,
       summary: (summary as SummaryRow | null) ?? null,
+      concepts: (concepts as LectureConceptRow[] | null) ?? [],
     },
     error: null,
   };

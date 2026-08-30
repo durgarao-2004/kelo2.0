@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Sparkles, Search as SearchIcon, RefreshCw } from "lucide-react";
+import { Sparkles, Search as SearchIcon, RefreshCw, BookOpen } from "lucide-react";
 import {
   askAction,
   searchAction,
@@ -94,6 +94,21 @@ export function SearchClient() {
                   </ul>
                 </div>
               ) : null}
+              {ask.academicReferences && ask.academicReferences.length > 0 ? (
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <BookOpen className="h-3.5 w-3.5" /> Academic reference
+                  </p>
+                  <ul className="space-y-2">
+                    {ask.academicReferences.map((r, i) => (
+                      <li key={`${r.lectureId}-${r.concept}-${i}`} className="text-sm">
+                        <span className="font-medium">{r.concept}</span>{" "}
+                        <span className="text-xs text-primary">{r.citation}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -119,26 +134,64 @@ export function SearchClient() {
           ) : null}
 
           {search.searched && !search.error ? (
-            search.hits && search.hits.length > 0 ? (
-              <ul className="space-y-3">
-                {search.hits.map((h, i) => (
-                  <li key={`${h.lectureId}-${i}`} className="rounded-xl border border-border bg-card p-4">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <Link href="/lectures" className="font-medium hover:underline">
-                        {h.title}
-                      </Link>
-                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
-                        {h.source}
-                        {h.subjectName ? ` · ${h.subjectName}` : ""}
-                      </span>
-                    </div>
-                    <p className="text-sm text-muted-foreground">{h.excerpt}</p>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-muted-foreground">No matches found.</p>
-            )
+            <div className="space-y-5">
+              {search.academicHits && search.academicHits.length > 0 ? (
+                <div>
+                  <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <BookOpen className="h-3.5 w-3.5" /> Academic reference
+                  </p>
+                  <ul className="space-y-2">
+                    {search.academicHits.map((h, i) => (
+                      <li
+                        key={`${h.lectureId}-${h.concept}-${i}`}
+                        className="rounded-xl border border-border bg-card p-4"
+                      >
+                        <p className="font-medium">{h.concept}</p>
+                        <p className="mt-1 text-xs text-primary">{h.citation}</p>
+                        <Link
+                          href={`/lectures/${h.lectureId}`}
+                          className="mt-1 inline-block text-xs text-muted-foreground hover:underline"
+                        >
+                          from {h.lectureTitle}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {search.hits && search.hits.length > 0 ? (
+                <div>
+                  {search.academicHits && search.academicHits.length > 0 ? (
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Lecture</p>
+                  ) : null}
+                  <ul className="space-y-3">
+                    {search.hits.map((h, i) => (
+                      <li
+                        key={`${h.lectureId}-${i}`}
+                        className="rounded-xl border border-border bg-card p-4"
+                      >
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <Link href="/lectures" className="font-medium hover:underline">
+                            {h.title}
+                          </Link>
+                          <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] capitalize text-muted-foreground">
+                            {h.source}
+                            {h.subjectName ? ` · ${h.subjectName}` : ""}
+                          </span>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{h.excerpt}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {(!search.hits || search.hits.length === 0) &&
+              (!search.academicHits || search.academicHits.length === 0) ? (
+                <p className="text-sm text-muted-foreground">No matches found.</p>
+              ) : null}
+            </div>
           ) : null}
         </div>
       )}
