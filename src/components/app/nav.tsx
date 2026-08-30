@@ -8,6 +8,7 @@ import {
   CircleCheckBig,
   Mic,
   Library,
+  BookOpen,
   Search,
   Settings,
   type LucideIcon,
@@ -26,6 +27,7 @@ const ITEMS: NavItem[] = [
   { href: "/attendance", label: "Attendance", icon: CircleCheckBig },
   { href: "/record", label: "Record", icon: Mic },
   { href: "/lectures", label: "Lectures", icon: Library },
+  { href: "/revision", label: "Revision", icon: BookOpen },
   { href: "/search", label: "Search", icon: Search },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

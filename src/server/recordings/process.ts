@@ -9,7 +9,7 @@ import {
 } from "@/server/drive/client";
 import { transcribeAudio } from "@/server/ai/transcribe";
 import { analyzeLecture } from "@/server/ai/tasks";
-import type { LectureAnalysis } from "@/features/ai/lecture-analysis";
+import { buildSearchableSummaryText, type LectureAnalysis } from "@/features/ai/lecture-analysis";
 import { cleanTranscript } from "@/features/ai/transcript-clean";
 import { asStringArray, asFlashcards, asDefinitions, asNoteSections } from "@/features/ai/parse";
 import { resumeStage, canClaim, claimStatusFor } from "@/features/ai/pipeline-stage";
@@ -282,7 +282,9 @@ export async function processLecture(
       lectureId,
       subjectId: subject?.id ?? null,
       transcript,
-      summary: analysis.summary,
+      // Includes notes/definitions/examples/revision material, not just the
+      // short summary paragraph — otherwise none of that is ever searchable.
+      summary: buildSearchableSummaryText(analysis),
     });
 
     try {

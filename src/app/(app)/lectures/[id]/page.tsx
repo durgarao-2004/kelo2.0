@@ -1,77 +1,22 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, FileText, HardDrive, BookOpen } from "lucide-react";
+import { ArrowLeft, FileText, HardDrive } from "lucide-react";
 import { requireUser } from "@/server/auth/current-user";
 import { getLectureDetail } from "@/server/db/lectures";
 import { formatDuration } from "@/lib/utils/time";
 import { toUserFacingProcessingError } from "@/lib/errors/user-facing";
 import { StatusBadge } from "@/components/lectures/status-badge";
 import { ProcessButton } from "@/components/lectures/process-button";
+import { LectureSummaryView } from "@/components/lectures/lecture-summary-view";
+import { AcademicReferenceCard } from "@/components/lectures/academic-reference-card";
 import { Card, CardContent } from "@/components/ui/card";
-import { getTextbookByKey, formatTextbookCitation } from "@/config/textbooks";
 
 export const metadata: Metadata = { title: "Lecture" };
 export const dynamic = "force-dynamic";
 
-function asStringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((v): v is string => typeof v === "string")
-    : [];
-}
-
 function driveLink(id: string | null): string | null {
   return id ? `https://drive.google.com/file/d/${id}/view` : null;
-}
-
-function Section({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null;
-  return (
-    <div>
-      <h3 className="mb-2 text-sm font-semibold text-muted-foreground">{title}</h3>
-      <ul className="list-disc space-y-1 pl-5 text-sm">
-        {items.map((it, i) => (
-          <li key={i}>{it}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-interface NoteSection {
-  heading: string;
-  points: string[];
-}
-
-function asNoteSections(value: unknown): NoteSection[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((v) => {
-      const heading = (v as { heading?: unknown })?.heading;
-      const points = asStringList((v as { points?: unknown })?.points);
-      return typeof heading === "string" && heading.trim() && points.length > 0
-        ? { heading, points }
-        : null;
-    })
-    .filter((v): v is NoteSection => v !== null);
-}
-
-interface Definition {
-  term: string;
-  definition: string;
-}
-
-function asDefinitions(value: unknown): Definition[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((v) => {
-      const term = (v as { term?: unknown })?.term;
-      const definition = (v as { definition?: unknown })?.definition;
-      return typeof term === "string" && typeof definition === "string" && term.trim()
-        ? { term, definition }
-        : null;
-    })
-    .filter((v): v is Definition => v !== null);
 }
 
 export default async function LectureDetailPage({
@@ -84,30 +29,7 @@ export default async function LectureDetailPage({
   const { data } = await getLectureDetail(user.id, id);
   if (!data) notFound();
 
-  const { lecture, transcript, summary, concepts: textbookConcepts } = data;
-  const verifiedConcepts = textbookConcepts
-    .filter((c) => c.textbook_status === "verified" && c.textbook_subject_key)
-    .map((c) => ({
-      concept: c.concept,
-      lectureConnection: c.lecture_connection,
-      explanation: c.textbook_explanation,
-      textbook: getTextbookByKey(c.textbook_subject_key!),
-    }))
-    .filter((c) => c.textbook !== null);
-  const revision = (summary?.revision ?? {}) as {
-    examQuestions?: unknown;
-    flashcards?: unknown;
-    quickReview?: unknown;
-  };
-  const flashcards = Array.isArray(revision.flashcards)
-    ? (revision.flashcards as Array<{ q?: unknown; a?: unknown }>).filter(
-        (c) => typeof c.q === "string" && typeof c.a === "string",
-      )
-    : [];
-  const notes = asNoteSections(summary?.notes);
-  const definitions = asDefinitions(summary?.definitions);
-  const examples = asStringList(summary?.examples);
-
+  const { lecture, transcript, summary, concepts } = data;
   const hasAnalysis = Boolean(summary);
   const recDrive = driveLink(lecture.drive_recording_file_id);
   const tDrive = driveLink(lecture.drive_transcript_file_id);
@@ -189,115 +111,8 @@ export default async function LectureDetailPage({
         </Card>
       ) : (
         <div className="space-y-6">
-          {summary?.summary ? (
-            <Card>
-              <CardContent>
-                <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Summary</h2>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {summary.summary}
-                </p>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          {notes.length > 0 ? (
-            <Card>
-              <CardContent className="space-y-5">
-                <h2 className="text-sm font-semibold text-muted-foreground">Notes</h2>
-                {notes.map((section, i) => (
-                  <Section key={i} title={section.heading} items={section.points} />
-                ))}
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <Card>
-            <CardContent className="space-y-5">
-              <Section title="Key concepts" items={asStringList(summary?.key_concepts)} />
-              {definitions.length > 0 ? (
-                <div>
-                  <h3 className="mb-2 text-sm font-semibold text-muted-foreground">
-                    Definitions
-                  </h3>
-                  <ul className="space-y-2 text-sm">
-                    {definitions.map((d, i) => (
-                      <li key={i}>
-                        <span className="font-medium">{d.term}:</span>{" "}
-                        <span className="text-foreground/90">{d.definition}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              <Section title="Examples" items={examples} />
-              <Section title="Important points" items={asStringList(summary?.important_points)} />
-              <Section title="Topics" items={asStringList(summary?.topics)} />
-            </CardContent>
-          </Card>
-
-          {verifiedConcepts.length > 0 ? (
-            <Card>
-              <CardContent className="space-y-5">
-                <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                  <BookOpen className="h-4 w-4" /> Academic reference
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  Textbook-grounded explanations, kept separate from what your professor
-                  actually said — the lecture and the textbook aren&apos;t always identical.
-                </p>
-                <div className="space-y-4">
-                  {verifiedConcepts.map((c, i) => (
-                    <div key={i} className="rounded-xl border border-border p-4">
-                      <p className="font-medium">{c.concept}</p>
-                      <p className="mt-1 text-xs font-medium text-primary">
-                        {formatTextbookCitation(c.textbook!)}
-                      </p>
-                      {c.explanation ? (
-                        <p className="mt-2 text-sm leading-relaxed text-foreground/90">
-                          {c.explanation}
-                        </p>
-                      ) : null}
-                      {c.lectureConnection ? (
-                        <p className="mt-2 text-sm text-muted-foreground">
-                          <span className="font-medium text-foreground">From your lecture: </span>
-                          {c.lectureConnection}
-                        </p>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          {(asStringList(revision.examQuestions).length > 0 ||
-            flashcards.length > 0 ||
-            asStringList(revision.quickReview).length > 0) ? (
-            <Card>
-              <CardContent className="space-y-5">
-                <h2 className="text-sm font-semibold text-muted-foreground">
-                  Revision material
-                </h2>
-                <Section title="Likely exam questions" items={asStringList(revision.examQuestions)} />
-                {flashcards.length > 0 ? (
-                  <div>
-                    <h3 className="mb-2 text-sm font-semibold text-muted-foreground">
-                      Flashcards
-                    </h3>
-                    <ul className="space-y-2">
-                      {flashcards.map((c, i) => (
-                        <li key={i} className="rounded-lg border border-border p-3 text-sm">
-                          <p className="font-medium">{String(c.q)}</p>
-                          <p className="mt-1 text-muted-foreground">{String(c.a)}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-                <Section title="Quick review" items={asStringList(revision.quickReview)} />
-              </CardContent>
-            </Card>
-          ) : null}
+          <LectureSummaryView summary={summary} />
+          <AcademicReferenceCard concepts={concepts} />
 
           {transcript ? (
             <details className="rounded-2xl border border-border bg-card p-5">

@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { HardDrive, Library, TrendingUp, AlertTriangle } from "lucide-react";
+import { HardDrive, Library, TrendingUp, AlertTriangle, BookOpen } from "lucide-react";
 import { requireUser } from "@/server/auth/current-user";
 import { listSchedule } from "@/server/db/schedule";
 import { attendanceSummary } from "@/server/db/attendance";
-import { listLectures } from "@/server/db/lectures";
+import { listLectures, listLecturesNeedingAttention } from "@/server/db/lectures";
 import { getDriveConnection } from "@/server/db/drive";
 import { overallAttendance } from "@/features/attendance/calc";
 import { Greeting } from "@/components/dashboard/greeting";
 import { TodayTimeline } from "@/components/dashboard/today-timeline";
+import { DashboardNotifier } from "@/components/dashboard/dashboard-notifier";
 import { AttendanceRing } from "@/components/attendance/attendance-ring";
+import { StatusBadge } from "@/components/lectures/status-badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { DataError } from "@/components/app/page-header";
 
@@ -18,10 +20,11 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const [scheduleRes, attRes, lecturesRes, drive] = await Promise.all([
+  const [scheduleRes, attRes, lecturesRes, attentionRes, drive] = await Promise.all([
     listSchedule(user.id),
     attendanceSummary(user.id),
     listLectures(user.id, 5),
+    listLecturesNeedingAttention(user.id),
     getDriveConnection(user.id).catch(() => ({
       connected: false,
       googleEmail: null,
@@ -29,15 +32,17 @@ export default async function DashboardPage() {
     })),
   ]);
 
+  const totalSessions = attRes.data.reduce((sum, s) => sum + (s.stats.totalSessions ?? 0), 0);
   const overall = overallAttendance(
     attRes.data.map((s) => ({
       attended: s.stats.attended,
       conducted: s.stats.conducted,
     })),
     75,
-    attRes.data.reduce((sum, s) => sum + (s.stats.totalSessions ?? 0), 0),
+    totalSessions,
   );
   const atRisk = attRes.data.filter((s) => s.stats.status === "warning");
+  const revisableCount = lecturesRes.data.filter((l) => l.status === "completed").length;
   const error = scheduleRes.error || attRes.error || lecturesRes.error;
 
   return (
@@ -51,6 +56,32 @@ export default async function DashboardPage() {
 
       {error ? <DataError message={error} /> : null}
 
+      <DashboardNotifier schedule={scheduleRes.data} attendance={attRes.data} />
+
+      {attentionRes.data.length > 0 ? (
+        <div className="mb-6 rounded-2xl border border-warning/30 bg-warning/10 p-4">
+          <p className="mb-2 flex items-center gap-2 text-sm font-medium">
+            <AlertTriangle className="h-4 w-4 text-warning" /> Needs attention
+          </p>
+          <ul className="space-y-2">
+            {attentionRes.data.map((l) => (
+              <li key={l.id}>
+                <Link
+                  href={`/lectures/${l.id}`}
+                  className="flex items-center justify-between gap-2 rounded-lg bg-card px-3 py-2 text-sm hover:border-primary/40"
+                >
+                  <span className="truncate">
+                    {l.title ?? "Untitled lecture"}
+                    {l.subject?.name ? ` · ${l.subject.name}` : ""}
+                  </span>
+                  <StatusBadge status={l.status} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <TodayTimeline entries={scheduleRes.data} />
@@ -59,26 +90,73 @@ export default async function DashboardPage() {
         <div className="space-y-6">
           {/* Attendance */}
           <Card>
-            <CardContent className="flex items-center gap-4">
-              <AttendanceRing
-                percentage={overall.percentage}
-                status={overall.status}
-                size={84}
-              />
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">
-                  Overall attendance
-                </p>
-                <p className="text-2xl font-semibold">
-                  {overall.percentage === null ? "—" : `${overall.percentage}%`}
-                </p>
-                <Link
-                  href="/attendance"
-                  className="text-xs text-primary hover:underline"
-                >
-                  View by subject
-                </Link>
+            <CardContent>
+              <div className="flex items-center gap-4">
+                <AttendanceRing
+                  percentage={overall.percentage}
+                  status={overall.status}
+                  size={84}
+                />
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">
+                    Overall attendance
+                  </p>
+                  <p className="text-2xl font-semibold">
+                    {overall.percentage === null ? "—" : `${overall.percentage}%`}
+                  </p>
+                  <Link
+                    href="/attendance"
+                    className="text-xs text-primary hover:underline"
+                  >
+                    View by subject
+                  </Link>
+                </div>
               </div>
+              {overall.status !== "no_data" ? (
+                <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-border pt-3 text-xs">
+                  <div>
+                    <dt className="text-muted-foreground">Present</dt>
+                    <dd className="font-medium">{overall.attended}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Absent</dt>
+                    <dd className="font-medium">{overall.missed}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Conducted</dt>
+                    <dd className="font-medium">
+                      {overall.conducted}
+                      {overall.totalSessions ? ` / ${overall.totalSessions}` : ""}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Remaining</dt>
+                    <dd className="font-medium">{overall.remaining ?? "—"}</dd>
+                  </div>
+                </dl>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          {/* Revision entry point */}
+          <Card>
+            <CardContent>
+              <p className="mb-1 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                <BookOpen className="h-4 w-4" /> Revision
+              </p>
+              {revisableCount > 0 ? (
+                <p className="text-sm">
+                  {revisableCount} recent lecture{revisableCount === 1 ? "" : "s"} ready to
+                  revise.
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Process a lecture to unlock revision material.
+                </p>
+              )}
+              <Link href="/revision" className="mt-2 inline-block text-xs text-primary hover:underline">
+                Start revising
+              </Link>
             </CardContent>
           </Card>
 

@@ -1,6 +1,7 @@
 import "server-only";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
-import type { Database } from "@/lib/supabase/types";
+import type { Database, LectureStatus } from "@/lib/supabase/types";
+import { ATTENTION_STATUSES, attentionRank } from "@/features/dashboard/lecture-attention";
 import type { DbResult } from "./subjects";
 
 export type Lecture = Database["public"]["Tables"]["lectures"]["Row"];
@@ -23,6 +24,46 @@ export async function listLectures(
     data: (data as LectureWithSubject[] | null) ?? [],
     error: error?.message ?? null,
   };
+}
+
+/**
+ * Lectures a student should actually look at right now: ones stuck needing a
+ * retry, or ones still processing. Ordered so failed/recoverable (actionable)
+ * come first, then in-flight (informational), most recently touched first.
+ * Excludes "completed" and "recording"/"uploaded" (normal, no action needed).
+ *
+ * Two queries rather than one embedded select — combining `.in()` with an
+ * embedded `subject:subjects(...)` relation defeats this Supabase client
+ * version's type inference for the row shape (see textbook-concepts.ts for
+ * the same workaround).
+ */
+export async function listLecturesNeedingAttention(
+  userId: string,
+  limit = 5,
+): Promise<DbResult<LectureWithSubject[]>> {
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("lectures")
+    .select("*")
+    .eq("user_id", userId)
+    .in("status", ATTENTION_STATUSES as LectureStatus[])
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+  if (error) return { data: [], error: error.message };
+
+  const rows = data ?? [];
+  if (rows.length === 0) return { data: [], error: null };
+
+  const subjectIds = [...new Set(rows.map((r) => r.subject_id).filter((id): id is string => Boolean(id)))];
+  const { data: subjects } = subjectIds.length
+    ? await db.from("subjects").select("id, name, color").eq("user_id", userId).in("id", subjectIds)
+    : { data: [] };
+  const subjectById = new Map((subjects ?? []).map((s) => [s.id, s]));
+
+  const withSubject: LectureWithSubject[] = rows
+    .map((r) => ({ ...r, subject: r.subject_id ? (subjectById.get(r.subject_id) ?? null) : null }))
+    .sort((a, b) => attentionRank(a.status) - attentionRank(b.status));
+  return { data: withSubject, error: null };
 }
 
 export async function getLecture(
