@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
+import { ServiceWorkerRegister } from "@/components/pwa/sw-register";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -20,6 +21,10 @@ export const metadata: Metadata = {
   },
   description:
     "Record, organize, transcribe, and understand your lectures — with attendance tracking and AI-powered revision.",
+  icons: {
+    icon: "/favicon.ico",
+    apple: "/icons/icon-192.png",
+  },
 };
 
 export const viewport: Viewport = {
@@ -37,6 +42,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
+        <ServiceWorkerRegister />
         {children}
       </body>
     </html>

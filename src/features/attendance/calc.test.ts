@@ -3,6 +3,7 @@ import {
   computeAttendance,
   computeAttendanceFromRecords,
   overallAttendance,
+  validateAttendanceMutation,
 } from "./calc";
 
 describe("computeAttendance", () => {
@@ -72,6 +73,96 @@ describe("computeAttendance", () => {
   it("clamps negative inputs", () => {
     const s = computeAttendance({ attended: -5, missed: -2, requiredPercent: 75 });
     expect(s.status).toBe("no_data");
+  });
+});
+
+describe("computeAttendance with totalSessions", () => {
+  it("reports remaining sessions and leaves totalSessions/remaining null when unknown", () => {
+    const withTotal = computeAttendance({
+      attended: 20,
+      missed: 5,
+      requiredPercent: 75,
+      totalSessions: 33,
+    });
+    expect(withTotal.totalSessions).toBe(33);
+    expect(withTotal.remaining).toBe(8); // 33 - 25
+
+    const withoutTotal = computeAttendance({ attended: 20, missed: 5, requiredPercent: 75 });
+    expect(withoutTotal.totalSessions).toBeNull();
+    expect(withoutTotal.remaining).toBeNull();
+  });
+
+  it("clamps remaining to 0 rather than going negative when conducted exceeds total", () => {
+    const s = computeAttendance({
+      attended: 30,
+      missed: 10,
+      requiredPercent: 75,
+      totalSessions: 33,
+    });
+    expect(s.conducted).toBe(40);
+    expect(s.remaining).toBe(0);
+  });
+
+  it("bounds safeSkips by the sessions actually remaining in the term", () => {
+    // Attended is far ahead of target, so the raw safeSkips formula would
+    // allow skipping many more classes than the term even has left.
+    const s = computeAttendance({
+      attended: 30,
+      missed: 0,
+      requiredPercent: 50,
+      totalSessions: 33,
+    });
+    // Raw formula: floor(30*100/50) - 30 = 30, but only 3 sessions remain.
+    expect(s.remaining).toBe(3);
+    expect(s.safeSkips).toBe(3);
+  });
+
+  it("ignores a non-positive totalSessions as unknown", () => {
+    const s = computeAttendance({ attended: 5, missed: 1, requiredPercent: 75, totalSessions: 0 });
+    expect(s.totalSessions).toBeNull();
+    expect(s.remaining).toBeNull();
+  });
+});
+
+describe("validateAttendanceMutation", () => {
+  it("allows a mark that stays within the total", () => {
+    expect(
+      validateAttendanceMutation({
+        conductedExcludingThisSlot: 10,
+        nextStatus: "attended",
+        totalSessions: 33,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("allows exactly reaching the total (boundary)", () => {
+    expect(
+      validateAttendanceMutation({
+        conductedExcludingThisSlot: 32,
+        nextStatus: "missed",
+        totalSessions: 33,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("rejects a mark that would push conducted past the total", () => {
+    const result = validateAttendanceMutation({
+      conductedExcludingThisSlot: 33,
+      nextStatus: "attended",
+      totalSessions: 33,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/exceeds the total/);
+  });
+
+  it("never rejects marking a slot cancelled, since cancelled doesn't count as conducted", () => {
+    expect(
+      validateAttendanceMutation({
+        conductedExcludingThisSlot: 33,
+        nextStatus: "cancelled",
+        totalSessions: 33,
+      }),
+    ).toEqual({ ok: true });
   });
 });
 

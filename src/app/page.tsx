@@ -206,6 +206,14 @@ export default function LandingPage() {
         <div className="container flex flex-col items-center justify-between gap-3 py-8 text-sm text-muted-foreground sm:flex-row">
           <span className="font-semibold text-foreground">KELO</span>
           <span>Your academic class companion.</span>
+          <nav className="flex items-center gap-4">
+            <Link href="/terms" className="hover:text-foreground">
+              Terms
+            </Link>
+            <Link href="/privacy" className="hover:text-foreground">
+              Privacy
+            </Link>
+          </nav>
         </div>
       </footer>
     </div>

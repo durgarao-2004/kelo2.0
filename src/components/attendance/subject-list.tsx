@@ -45,17 +45,20 @@ function MarkButton({
   children: React.ReactNode;
   className?: string;
 }) {
+  const [state, formAction, pending] = React.useActionState(markAttendanceAction, {});
   return (
-    <form action={markAttendanceAction}>
+    <form action={formAction} className="inline-flex flex-col items-start gap-1">
       <input type="hidden" name="subject_id" value={subjectId} />
       <input type="hidden" name="status" value={status} />
       <input type="hidden" name="occurred_on" value={todayLocal()} />
       <button
         type="submit"
-        className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition hover:bg-secondary ${className ?? ""}`}
+        disabled={pending}
+        className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition hover:bg-secondary disabled:opacity-60 ${className ?? ""}`}
       >
         {children}
       </button>
+      {state.error ? <span className="text-xs text-destructive">{state.error}</span> : null}
     </form>
   );
 }
@@ -117,6 +120,9 @@ export function SubjectList({ items }: { items: SubjectAttendanceVM[] }) {
               <p className="mt-1 text-xs text-muted-foreground">
                 {item.stats.attended}/{item.stats.conducted} attended · required{" "}
                 {item.stats.requiredPercent}%
+                {item.stats.totalSessions !== null
+                  ? ` · ${item.stats.conducted}/${item.stats.totalSessions} sessions · ${item.stats.remaining} remaining`
+                  : ""}
               </p>
               <p
                 className={`mt-1 text-xs font-medium ${

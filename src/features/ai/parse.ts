@@ -61,3 +61,53 @@ export function asFlashcards(value: unknown, max = 30): Flashcard[] {
   }
   return cards;
 }
+
+export interface Definition {
+  term: string;
+  definition: string;
+}
+
+/** Definitions the lecturer actually gave — defensively parsed so a
+ * malformed/partial model response degrades to fewer entries, never a crash. */
+export function asDefinitions(value: unknown, max = 50): Definition[] {
+  if (!Array.isArray(value)) return [];
+  const out: Definition[] = [];
+  for (const item of value) {
+    if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as Record<string, unknown>).term === "string" &&
+      typeof (item as Record<string, unknown>).definition === "string" &&
+      (item as Record<string, string>).term.trim() &&
+      (item as Record<string, string>).definition.trim()
+    ) {
+      out.push({
+        term: (item as Definition).term.trim(),
+        definition: (item as Definition).definition.trim(),
+      });
+    }
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+export interface NoteSection {
+  heading: string;
+  points: string[];
+}
+
+/** Structured lecture notes as headed sections of bullet points. */
+export function asNoteSections(value: unknown, max = 20): NoteSection[] {
+  if (!Array.isArray(value)) return [];
+  const out: NoteSection[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const heading = (item as Record<string, unknown>).heading;
+    const points = asStringArray((item as Record<string, unknown>).points, 30);
+    if (typeof heading === "string" && heading.trim() && points.length > 0) {
+      out.push({ heading: heading.trim(), points });
+    }
+    if (out.length >= max) break;
+  }
+  return out;
+}

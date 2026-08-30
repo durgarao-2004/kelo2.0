@@ -5,11 +5,22 @@ import {
   ensureFolderTree,
   downloadFile,
   uploadTextFile,
+  deleteFile,
 } from "@/server/drive/client";
 import { transcribeAudio } from "@/server/ai/transcribe";
-import { analyzeLecture, type LectureAnalysis } from "@/server/ai/tasks";
+import { analyzeLecture } from "@/server/ai/tasks";
+import type { LectureAnalysis } from "@/features/ai/lecture-analysis";
+import { cleanTranscript } from "@/features/ai/transcript-clean";
+import { asStringArray, asFlashcards, asDefinitions, asNoteSections } from "@/features/ai/parse";
+import { resumeStage, canClaim, claimStatusFor } from "@/features/ai/pipeline-stage";
 import { indexLectureChunks } from "@/server/search/index-lecture";
 import type { Database, Json } from "@/lib/supabase/types";
+
+// Comfortably longer than the pipeline's own transcription/analysis budgets
+// (see transcribe.ts's POLL_TIMEOUT_MS and this route's maxDuration) so a
+// genuinely-running attempt is never mistaken for an abandoned one, but a
+// crashed/killed process doesn't wedge a lecture "Transcribing" forever.
+const STALE_IN_FLIGHT_MS = 12 * 60 * 1000;
 
 interface SubjectInfo {
   id: string;
@@ -24,9 +35,42 @@ function coerceSubject(value: unknown): SubjectInfo | null {
   return null;
 }
 
+/** Rebuild an analysis-shaped view from an already-stored summary row, for
+ * the "finalize" resume path where analysis already ran in a prior attempt. */
+function summaryRowToAnalysis(
+  row: Database["public"]["Tables"]["summaries"]["Row"] | null,
+  fallbackTitle: string,
+): LectureAnalysis {
+  if (!row) throw new Error("summary_missing");
+  const revision = (row.revision ?? {}) as Record<string, unknown>;
+  return {
+    title: fallbackTitle,
+    summary: typeof row.summary === "string" ? row.summary : "",
+    keyConcepts: asStringArray(row.key_concepts),
+    importantPoints: asStringArray(row.important_points),
+    topics: asStringArray(row.topics),
+    notes: asNoteSections(row.notes),
+    definitions: asDefinitions(row.definitions),
+    examples: asStringArray(row.examples),
+    revision: {
+      examQuestions: asStringArray(revision.examQuestions),
+      flashcards: asFlashcards(revision.flashcards),
+      quickReview: asStringArray(revision.quickReview),
+    },
+    provider: "cached",
+    model: row.model ?? "cached",
+  };
+}
+
 function renderSummaryMarkdown(title: string, a: LectureAnalysis): string {
   const list = (items: string[]) =>
     items.length ? items.map((i) => `- ${i}`).join("\n") : "_None_";
+  const notes = a.notes.length
+    ? a.notes.map((s) => `### ${s.heading}\n${list(s.points)}`).join("\n\n")
+    : "_None_";
+  const definitions = a.definitions.length
+    ? a.definitions.map((d) => `- **${d.term}:** ${d.definition}`).join("\n")
+    : "_None_";
   const cards = a.revision.flashcards.length
     ? a.revision.flashcards.map((c) => `- **Q:** ${c.q}\n  **A:** ${c.a}`).join("\n")
     : "_None_";
@@ -36,8 +80,17 @@ function renderSummaryMarkdown(title: string, a: LectureAnalysis): string {
     `## Summary`,
     a.summary || "_None_",
     ``,
+    `## Notes`,
+    notes,
+    ``,
     `## Key concepts`,
     list(a.keyConcepts),
+    ``,
+    `## Definitions`,
+    definitions,
+    ``,
+    `## Examples`,
+    list(a.examples),
     ``,
     `## Important points`,
     list(a.importantPoints),
@@ -58,61 +111,124 @@ function renderSummaryMarkdown(title: string, a: LectureAnalysis): string {
   ].join("\n");
 }
 
+export interface ProcessLectureOptions {
+  /** Redo analysis from the existing transcript even though a summary
+   * already exists — the user explicitly asked to re-process. Never
+   * re-transcribes: the audio hasn't changed, so paying for transcription
+   * again would be pure waste. */
+  forceReanalyze?: boolean;
+}
+
 /**
- * Full post-recording pipeline: download audio → transcribe → analyze →
- * persist transcript + summary → upload text files to Drive → index for RAG.
- * The audio is already safely stored, so a failure here marks the lecture
- * "recoverable" (never "completed") with an error note — the recording and
- * any transcript obtained before the failure are preserved, and the pipeline
- * is safe to retry from where it left off.
+ * Full post-recording pipeline: transcribe -> analyze -> persist -> Drive ->
+ * index. Resumable — always continues from whatever stage actually hasn't
+ * succeeded yet (driven by what's persisted, not just the status label), so
+ * a retry after a downstream failure never re-transcribes or re-uploads
+ * already-safe work. Guarded against duplicate concurrent runs, but a run
+ * that's genuinely stuck (crashed process) can be reclaimed after a timeout
+ * so a lecture is never permanently wedged mid-pipeline.
  */
 export async function processLecture(
   userId: string,
   lectureId: string,
+  options: ProcessLectureOptions = {},
 ): Promise<{ ok: boolean; error?: string }> {
   const db = getSupabaseAdmin();
 
   const { data: lecture } = await db
     .from("lectures")
-    .select("id, title, drive_recording_file_id, subject:subjects(id, name, year, semester)")
+    .select(
+      "id, title, status, updated_at, drive_recording_file_id, drive_transcript_file_id, drive_summary_file_id, subject:subjects(id, name, year, semester)",
+    )
     .eq("user_id", userId)
     .eq("id", lectureId)
     .maybeSingle();
 
   if (!lecture) return { ok: false, error: "not_found" };
   if (!lecture.drive_recording_file_id) return { ok: false, error: "no_audio" };
+  if (lecture.status === "completed" && !options.forceReanalyze) return { ok: true };
+
   const subject = coerceSubject(lecture.subject);
   const title = lecture.title ?? "Lecture";
 
+  const [{ data: transcriptRow }, { data: summaryRow }] = await Promise.all([
+    db.from("transcripts").select("content").eq("lecture_id", lectureId).maybeSingle(),
+    db.from("summaries").select("id").eq("lecture_id", lectureId).maybeSingle(),
+  ]);
+  const hasTranscript = Boolean(transcriptRow?.content?.trim());
+  const hasSummary = Boolean(summaryRow) && !options.forceReanalyze;
+  const stage = resumeStage(hasTranscript, hasSummary);
+  const claimStatus = claimStatusFor(stage);
+
+  const updatedAtMs = new Date(lecture.updated_at).getTime();
+  if (!canClaim(lecture.status, updatedAtMs, Date.now(), STALE_IN_FLIGHT_MS)) {
+    return { ok: false, error: "already_processing" };
+  }
+
+  // Compare-and-swap on the exact row version we just read: only one
+  // concurrent caller wins this update, so two racing requests (a double
+  // click, or an auto-trigger racing a manual retry) can never both run the
+  // pipeline and create duplicate Drive files / summaries.
+  const { data: claimed } = await db
+    .from("lectures")
+    .update({ status: claimStatus, error: null })
+    .eq("id", lectureId)
+    .eq("user_id", userId)
+    .eq("status", lecture.status)
+    .eq("updated_at", lecture.updated_at)
+    .select("id")
+    .maybeSingle();
+  if (!claimed) return { ok: false, error: "already_processing" };
+
   try {
     const token = await getValidAccessToken(userId);
+    let transcript = transcriptRow?.content ?? "";
 
-    await db.from("lectures").update({ status: "transcribing" }).eq("id", lectureId);
-    const audio = await downloadFile(token, lecture.drive_recording_file_id);
-    const { text: transcript } = await transcribeAudio(audio, "audio/webm");
-    await db
-      .from("transcripts")
-      .upsert(
-        { lecture_id: lectureId, user_id: userId, content: transcript },
+    if (stage === "transcribe") {
+      const audio = await downloadFile(token, lecture.drive_recording_file_id);
+      const { text } = await transcribeAudio(audio, "audio/webm");
+      const cleaned = cleanTranscript(text);
+      if (!cleaned) throw new Error("empty_transcript");
+      transcript = cleaned;
+      await db
+        .from("transcripts")
+        .upsert(
+          { lecture_id: lectureId, user_id: userId, content: transcript },
+          { onConflict: "lecture_id" },
+        );
+      await db.from("lectures").update({ status: "transcribed" }).eq("id", lectureId);
+    }
+
+    let analysis: LectureAnalysis;
+    if (stage === "transcribe" || stage === "analyze") {
+      await db.from("lectures").update({ status: "analyzing" }).eq("id", lectureId);
+      analysis = await analyzeLecture(transcript, subject?.name ?? "Lecture");
+      await db.from("summaries").upsert(
+        {
+          lecture_id: lectureId,
+          user_id: userId,
+          summary: analysis.summary,
+          key_concepts: analysis.keyConcepts,
+          important_points: analysis.importantPoints,
+          topics: analysis.topics,
+          notes: analysis.notes as unknown as Json,
+          definitions: analysis.definitions as unknown as Json,
+          examples: analysis.examples as unknown as Json,
+          revision: analysis.revision as unknown as Json,
+          model: analysis.model,
+        },
         { onConflict: "lecture_id" },
       );
-    await db.from("lectures").update({ status: "transcribed" }).eq("id", lectureId);
+    } else {
+      const { data: existingSummary } = await db
+        .from("summaries")
+        .select("*")
+        .eq("lecture_id", lectureId)
+        .maybeSingle();
+      analysis = summaryRowToAnalysis(existingSummary, title);
+    }
 
-    await db.from("lectures").update({ status: "analyzing" }).eq("id", lectureId);
-    const analysis = await analyzeLecture(transcript, subject?.name ?? "Lecture");
-    await db.from("summaries").upsert(
-      {
-        lecture_id: lectureId,
-        user_id: userId,
-        summary: analysis.summary,
-        key_concepts: analysis.keyConcepts,
-        important_points: analysis.importantPoints,
-        topics: analysis.topics,
-        revision: analysis.revision as unknown as Json,
-        model: analysis.model,
-      },
-      { onConflict: "lecture_id" },
-    );
+    await db.from("lectures").update({ status: "finalizing" }).eq("id", lectureId);
 
     const finalTitle = analysis.title || title;
     const patch: Database["public"]["Tables"]["lectures"]["Update"] = {
@@ -127,19 +243,36 @@ export async function processLecture(
         semester: subject.semester,
         subject: subject.name,
       });
-      patch.drive_transcript_file_id = await uploadTextFile(
-        token,
-        tree.leaves.Transcripts,
-        `${finalTitle}.txt`,
-        transcript,
-      );
-      patch.drive_summary_file_id = await uploadTextFile(
-        token,
-        tree.leaves.Summaries,
-        `${finalTitle}.md`,
-        renderSummaryMarkdown(finalTitle, analysis),
-        "text/markdown",
-      );
+
+      // The recording (and therefore the transcript) never changes on a
+      // re-process, so the transcript file is only ever created once.
+      let transcriptFileId = lecture.drive_transcript_file_id;
+      if (!transcriptFileId) {
+        transcriptFileId = await uploadTextFile(
+          token,
+          tree.leaves.Transcripts,
+          `${finalTitle}.txt`,
+          transcript,
+        );
+      }
+      patch.drive_transcript_file_id = transcriptFileId;
+
+      // The summary file IS regenerated on a forced re-analyze — replace it
+      // in place so repeated "Re-process" clicks never leave orphaned
+      // duplicate files behind in Drive.
+      let summaryFileId = lecture.drive_summary_file_id;
+      const regenerateSummaryFile = !summaryFileId || (options.forceReanalyze && stage !== "finalize");
+      if (regenerateSummaryFile) {
+        if (summaryFileId) await deleteFile(token, summaryFileId).catch(() => {});
+        summaryFileId = await uploadTextFile(
+          token,
+          tree.leaves.Summaries,
+          `${finalTitle}.md`,
+          renderSummaryMarkdown(finalTitle, analysis),
+          "text/markdown",
+        );
+      }
+      patch.drive_summary_file_id = summaryFileId;
     }
 
     await db.from("lectures").update(patch).eq("id", lectureId);

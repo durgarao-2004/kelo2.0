@@ -18,11 +18,18 @@ export type LectureStatus =
   | "transcribing"
   | "transcribed"
   | "analyzing"
+  | "finalizing"
   | "completed"
   | "failed"
   | "recoverable";
 
 export type AttendanceStatus = "attended" | "missed" | "cancelled";
+
+export type RecordingSessionStatus =
+  | "recording"
+  | "finalizing"
+  | "uploaded"
+  | "failed";
 
 type Timestamps = { created_at: string; updated_at: string };
 
@@ -58,6 +65,7 @@ export interface Database {
           name: string;
           color: string;
           target_attendance: number;
+          total_sessions: number;
           year: number | null;
           semester: string | null;
         } & Timestamps;
@@ -67,6 +75,7 @@ export interface Database {
           name: string;
           color?: string;
           target_attendance?: number;
+          total_sessions?: number;
           year?: number | null;
           semester?: string | null;
           created_at?: string;
@@ -184,6 +193,9 @@ export interface Database {
           key_concepts: Json;
           important_points: Json;
           topics: Json;
+          notes: Json;
+          definitions: Json;
+          examples: Json;
           revision: Json;
           model: string | null;
         } & Timestamps;
@@ -195,6 +207,9 @@ export interface Database {
           key_concepts?: Json;
           important_points?: Json;
           topics?: Json;
+          notes?: Json;
+          definitions?: Json;
+          examples?: Json;
           revision?: Json;
           model?: string | null;
           created_at?: string;
@@ -283,6 +298,50 @@ export interface Database {
           created_at?: string;
         };
         Update: Partial<Database["public"]["Tables"]["pin_recovery_tokens"]["Insert"]>;
+        Relationships: [];
+      };
+      recording_sessions: {
+        Row: {
+          id: string;
+          user_id: string;
+          subject_id: string | null;
+          title: string | null;
+          mime_type: string;
+          status: RecordingSessionStatus;
+          duration_seconds: number;
+          lecture_id: string | null;
+          error: string | null;
+        } & Timestamps;
+        Insert: {
+          id: string;
+          user_id: string;
+          subject_id?: string | null;
+          title?: string | null;
+          mime_type: string;
+          status?: RecordingSessionStatus;
+          duration_seconds?: number;
+          lecture_id?: string | null;
+          error?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["recording_sessions"]["Insert"]>;
+        Relationships: [];
+      };
+      recording_chunk_meta: {
+        Row: {
+          session_id: string;
+          chunk_index: number;
+          size_bytes: number;
+          created_at: string;
+        };
+        Insert: {
+          session_id: string;
+          chunk_index: number;
+          size_bytes: number;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["recording_chunk_meta"]["Insert"]>;
         Relationships: [];
       };
       lecture_chunks: {

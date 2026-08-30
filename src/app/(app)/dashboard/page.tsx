@@ -35,6 +35,7 @@ export default async function DashboardPage() {
       conducted: s.stats.conducted,
     })),
     75,
+    attRes.data.reduce((sum, s) => sum + (s.stats.totalSessions ?? 0), 0),
   );
   const atRisk = attRes.data.filter((s) => s.stats.status === "warning");
   const error = scheduleRes.error || attRes.error || lecturesRes.error;

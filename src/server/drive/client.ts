@@ -125,6 +125,19 @@ export async function ensureRootFolder(accessToken: string): Promise<string> {
   return findOrCreateFolder(accessToken, "KELO", "root");
 }
 
+/** Delete a Drive file by id (used to replace a stale generated file rather
+ * than accumulating duplicates on re-analysis). Treats "already gone" as
+ * success — the end state (no such file) is what we actually care about. */
+export async function deleteFile(accessToken: string, fileId: string): Promise<void> {
+  const res = await fetch(`${FILES_ENDPOINT}/${fileId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Drive delete failed (${res.status}).`);
+  }
+}
+
 /** Download a Drive file's bytes by id. */
 export async function downloadFile(
   accessToken: string,

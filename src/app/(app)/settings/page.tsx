@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
-import { HardDrive, Check, Cpu, Mail } from "lucide-react";
+import { HardDrive, Check, Cpu, Mail, Bell } from "lucide-react";
 import { requireUser } from "@/server/auth/current-user";
 import { getServerEnvDiagnostics } from "@/lib/env";
 import { getDriveConnection } from "@/server/db/drive";
 import { logoutAction } from "@/server/auth/actions";
 import { disconnectDriveAction } from "@/server/drive/actions";
 import { PageHeader } from "@/components/app/page-header";
+import { NotificationsToggle } from "@/components/settings/notifications-toggle";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -123,6 +124,16 @@ export default async function SettingsPage({
                 </a>
               </>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Notifications */}
+        <Card>
+          <CardContent className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+              <Bell className="h-4 w-4" /> Notifications
+            </h2>
+            <NotificationsToggle />
           </CardContent>
         </Card>
 

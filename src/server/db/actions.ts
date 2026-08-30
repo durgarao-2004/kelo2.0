@@ -34,6 +34,7 @@ export async function createSubjectAction(
   const name = String(formData.get("name") ?? "").trim();
   const color = String(formData.get("color") ?? "#4f46e5");
   const target = Number(formData.get("target_attendance") ?? 75);
+  const totalSessions = Number(formData.get("total_sessions") ?? 33);
   const yearRaw = String(formData.get("year") ?? "").trim();
   const semester = String(formData.get("semester") ?? "").trim() || null;
 
@@ -41,6 +42,7 @@ export async function createSubjectAction(
     name,
     color,
     target_attendance: Number.isFinite(target) ? target : 75,
+    total_sessions: Number.isFinite(totalSessions) && totalSessions > 0 ? Math.floor(totalSessions) : 33,
     year: yearRaw ? Number(yearRaw) : null,
     semester,
   });
@@ -56,10 +58,12 @@ export async function updateSubjectAction(
   const user = await requireUser();
   const id = String(formData.get("id") ?? "");
   const target = Number(formData.get("target_attendance") ?? 75);
+  const totalSessions = Number(formData.get("total_sessions") ?? 33);
   const { error } = await updateSubject(user.id, id, {
     name: String(formData.get("name") ?? "").trim(),
     color: String(formData.get("color") ?? "#4f46e5"),
     target_attendance: Number.isFinite(target) ? target : 75,
+    total_sessions: Number.isFinite(totalSessions) && totalSessions > 0 ? Math.floor(totalSessions) : 33,
   });
   if (error) return { error };
   revalidateAll();
@@ -134,8 +138,9 @@ export async function deleteScheduleAction(formData: FormData): Promise<void> {
 
 // ---------------- Attendance ----------------
 export async function markAttendanceAction(
+  _prev: ActionState,
   formData: FormData,
-): Promise<void> {
+): Promise<ActionState> {
   const user = await requireUser();
   const subject_id = String(formData.get("subject_id") ?? "");
   const status = String(formData.get("status") ?? "") as
@@ -147,13 +152,15 @@ export async function markAttendanceAction(
     new Date().toISOString().slice(0, 10);
   const scheduleRaw = String(formData.get("schedule_entry_id") ?? "");
   if (!subject_id || !["attended", "missed", "cancelled"].includes(status)) {
-    return;
+    return { error: "Invalid request." };
   }
-  await markAttendance(user.id, {
+  const { error } = await markAttendance(user.id, {
     subject_id,
     schedule_entry_id: scheduleRaw || null,
     occurred_on,
     status,
   });
+  if (error) return { error };
   revalidateAll();
+  return { ok: true };
 }

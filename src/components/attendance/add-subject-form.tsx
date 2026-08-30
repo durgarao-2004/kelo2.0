@@ -70,6 +70,16 @@ export function AddSubjectForm() {
           />
         </label>
         <label className="space-y-1 text-sm">
+          <span className="font-medium">Total sessions this term</span>
+          <input
+            name="total_sessions"
+            type="number"
+            min={1}
+            defaultValue={33}
+            className={inputClass}
+          />
+        </label>
+        <label className="space-y-1 text-sm">
           <span className="font-medium">Year (optional)</span>
           <input name="year" type="number" placeholder="2026" className={inputClass} />
         </label>

@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { notify } from "@/features/notifications/notify";
 
 /**
  * Triggers the transcription/analysis pipeline for a lecture and refreshes the
@@ -13,10 +14,14 @@ export function ProcessButton({
   lectureId,
   label = "Process",
   variant = "secondary",
+  force = false,
 }: {
   lectureId: string;
   label?: string;
   variant?: "primary" | "secondary";
+  /** Redo analysis even though it already succeeded (the transcript is
+   * reused — only the AI analysis + summary file are regenerated). */
+  force?: boolean;
 }) {
   const router = useRouter();
   const [pending, setPending] = React.useState(false);
@@ -28,11 +33,21 @@ export function ProcessButton({
     try {
       const res = await fetch(`/api/recordings/${lectureId}/process`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
-        setError(data.error ?? `Failed (${res.status}).`);
+        const message =
+          data.error === "already_processing"
+            ? "Already processing — check back in a moment."
+            : (data.error ?? `Failed (${res.status}).`);
+        setError(message);
+        if (data.error !== "already_processing") {
+          notify("Lecture processing failed", { body: message });
+        }
       } else {
+        notify("Lecture ready", { body: "Transcript and summary are ready to view." });
         router.refresh();
       }
     } catch {

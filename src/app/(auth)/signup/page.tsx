@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { SignupForm } from "@/components/auth/signup-form";
 
 export const metadata: Metadata = { title: "Create account" };
@@ -20,6 +21,17 @@ export default async function SignupPage({
         </p>
       </div>
       <SignupForm next={next} />
+      <p className="text-xs text-muted-foreground">
+        By creating an account you agree to KELO&apos;s{" "}
+        <Link href="/terms" className="underline hover:text-foreground">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" className="underline hover:text-foreground">
+          Privacy Policy
+        </Link>
+        .
+      </p>
     </div>
   );
 }

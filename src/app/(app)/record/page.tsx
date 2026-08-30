@@ -3,8 +3,10 @@ import Link from "next/link";
 import { requireUser } from "@/server/auth/current-user";
 import { listSubjects } from "@/server/db/subjects";
 import { getDriveConnection } from "@/server/db/drive";
+import { hasRecordingConsent } from "@/server/settings/consent";
 import { PageHeader, DataError } from "@/components/app/page-header";
 import { Recorder } from "@/components/recording/recorder";
+import { RecordingConsentGate } from "@/components/recording/consent-gate";
 import { Button } from "@/components/ui/button";
 
 export const metadata: Metadata = { title: "Record" };
@@ -12,13 +14,14 @@ export const dynamic = "force-dynamic";
 
 export default async function RecordPage() {
   const user = await requireUser();
-  const [subjectsRes, drive] = await Promise.all([
+  const [subjectsRes, drive, consented] = await Promise.all([
     listSubjects(user.id),
     getDriveConnection(user.id).catch(() => ({
       connected: false,
       googleEmail: null,
       rootFolderId: null,
     })),
+    hasRecordingConsent(user.id),
   ]);
 
   return (
@@ -38,10 +41,12 @@ export default async function RecordPage() {
           </Link>
         </div>
       ) : (
-        <Recorder
-          subjects={subjectsRes.data.map((s) => ({ id: s.id, name: s.name }))}
-          driveConnected={drive.connected}
-        />
+        <RecordingConsentGate initiallyConsented={consented}>
+          <Recorder
+            subjects={subjectsRes.data.map((s) => ({ id: s.id, name: s.name }))}
+            driveConnected={drive.connected}
+          />
+        </RecordingConsentGate>
       )}
     </div>
   );

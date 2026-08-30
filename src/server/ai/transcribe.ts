@@ -1,6 +1,7 @@
 import "server-only";
 import { getServerEnv } from "@/lib/env";
 import { ProviderError, withRetries, isRetryableHttpStatus } from "@/features/ai/retry";
+import { exceedsGroqWhisperLimit, GROQ_WHISPER_MAX_BYTES } from "@/features/ai/limits";
 import {
   extractUploadUrl,
   extractJobId,
@@ -17,7 +18,10 @@ export interface TranscriptionResult {
 const REQUEST_TIMEOUT_MS = 30_000;
 const UPLOAD_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 3_000;
-const POLL_TIMEOUT_MS = 4 * 60_000; // 4 minutes
+// Long lectures can take a while to transcribe; keep this comfortably under
+// the process route's maxDuration so a slow-but-healthy job still finishes
+// instead of racing the platform's own hard timeout.
+const POLL_TIMEOUT_MS = 6 * 60_000; // 6 minutes
 
 /** fetch() with a hard timeout, since a hung provider must never hang the pipeline. */
 async function fetchWithTimeout(
@@ -126,6 +130,14 @@ async function groqWhisper(
   model: string,
   apiKey: string,
 ): Promise<string> {
+  if (exceedsGroqWhisperLimit(bytes.byteLength)) {
+    // Fail fast and clearly instead of burning a request on a guaranteed
+    // 413 — long lectures are the norm here, not an edge case.
+    throw new ProviderError(
+      `audio too large for Groq Whisper (${(bytes.byteLength / (1024 * 1024)).toFixed(1)}MB > ${GROQ_WHISPER_MAX_BYTES / (1024 * 1024)}MB limit)`,
+      false,
+    );
+  }
   return withRetries(
     async () => {
       const form = new FormData();

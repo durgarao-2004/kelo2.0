@@ -37,6 +37,7 @@ export async function createSubject(
     name: string;
     color?: string;
     target_attendance?: number;
+    total_sessions?: number;
     year?: number | null;
     semester?: string | null;
   },
@@ -50,6 +51,7 @@ export async function createSubject(
       name,
       color: input.color,
       target_attendance: input.target_attendance,
+      total_sessions: input.total_sessions,
       year: input.year ?? null,
       semester: input.semester ?? null,
     })
@@ -65,7 +67,10 @@ export async function updateSubject(
   userId: string,
   id: string,
   patch: Partial<
-    Pick<Subject, "name" | "color" | "target_attendance" | "year" | "semester">
+    Pick<
+      Subject,
+      "name" | "color" | "target_attendance" | "total_sessions" | "year" | "semester"
+    >
   >,
 ): Promise<DbResult<Subject | null>> {
   const { data, error } = await getSupabaseAdmin()

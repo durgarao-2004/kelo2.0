@@ -4,48 +4,44 @@ import {
   extractJsonObject,
   asStringArray,
   asFlashcards,
-  type Flashcard,
+  asDefinitions,
+  asNoteSections,
 } from "@/features/ai/parse";
+import { clipForAnalysis } from "@/features/ai/limits";
+import {
+  emptyLectureAnalysis,
+  type LectureAnalysis,
+} from "@/features/ai/lecture-analysis";
 import type { AiTask, GenerateRequest } from "@/features/ai/types";
 import { buildAiClients } from "./clients";
 
-const MAX_TRANSCRIPT_CHARS = 14_000;
-
-function clip(text: string): string {
-  return text.length > MAX_TRANSCRIPT_CHARS
-    ? `${text.slice(0, MAX_TRANSCRIPT_CHARS)}…`
-    : text;
-}
+export type { LectureAnalysis };
 
 export async function runAiTask(task: AiTask, req: GenerateRequest) {
   return routeTask(task, req, buildAiClients());
 }
 
-export interface LectureAnalysis {
-  title: string;
-  summary: string;
-  keyConcepts: string[];
-  importantPoints: string[];
-  topics: string[];
-  revision: {
-    examQuestions: string[];
-    flashcards: Flashcard[];
-    quickReview: string[];
-  };
-  provider: string;
-  model: string;
-}
-
 const LECTURE_SYSTEM = `You are an academic study assistant. Given a lecture transcript, produce exam-focused study material.
+
+GROUNDING RULES — these override everything else:
+- Use ONLY information explicitly present in the transcript below. Do not invent, assume, or supplement with outside knowledge.
+- Never invent textbook definitions, citations, facts, or professor statements that are not actually in the transcript.
+- If the lecturer did not give a definition for a concept, do NOT make one up — just omit it from "definitions".
+- If the lecturer gave no worked examples, return an empty "examples" array rather than inventing one.
+- It is correct and expected to return short or empty arrays when the transcript doesn't contain that kind of content. A sparse but accurate result is always better than a fabricated one.
+
 Respond with STRICT JSON only, matching exactly:
 {
   "title": string,                // concise, specific lecture title
   "summary": string,              // 3-6 sentence summary
-  "key_concepts": string[],       // core concepts/terms
-  "important_points": string[],   // the most important takeaways
+  "key_concepts": string[],       // core concepts/terms actually discussed
+  "important_points": string[],   // the most important exam-relevant takeaways
   "topics": string[],             // short topic tags
+  "notes": [{"heading": string, "points": string[]}],  // structured lecture notes, grouped by subtopic in the order they were covered
+  "definitions": [{"term": string, "definition": string}], // ONLY terms the lecturer actually defined
+  "examples": string[],           // examples/worked problems/analogies the lecturer actually mentioned
   "revision": {
-    "exam_questions": string[],   // likely exam questions
+    "exam_questions": string[],   // likely exam questions based on emphasis in the transcript
     "flashcards": [{"q": string, "a": string}],
     "quick_review": string[]      // one-line facts to review
   }
@@ -55,20 +51,24 @@ Do not include commentary outside the JSON.`;
 /**
  * One efficient pass that titles, summarizes, extracts concepts, and builds
  * revision material. Uses the fast/quality tier via the router with fallback.
+ * Grounded strictly in the transcript — never fabricates content when the
+ * transcript doesn't contain it (see LECTURE_SYSTEM's grounding rules).
  */
 export async function analyzeLecture(
   transcript: string,
   subjectName: string,
 ): Promise<LectureAnalysis> {
+  if (!transcript.trim()) return emptyLectureAnalysis(subjectName);
+
   const result = await runAiTask("summary", {
     json: true,
     temperature: 0.3,
-    maxTokens: 1600,
+    maxTokens: 4096,
     messages: [
       { role: "system", content: LECTURE_SYSTEM },
       {
         role: "user",
-        content: `Subject: ${subjectName}\n\nTranscript:\n${clip(transcript)}`,
+        content: `Subject: ${subjectName}\n\nTranscript:\n${clipForAnalysis(transcript)}`,
       },
     ],
   });
@@ -85,6 +85,9 @@ export async function analyzeLecture(
     keyConcepts: asStringArray(parsed.key_concepts),
     importantPoints: asStringArray(parsed.important_points),
     topics: asStringArray(parsed.topics),
+    notes: asNoteSections(parsed.notes),
+    definitions: asDefinitions(parsed.definitions),
+    examples: asStringArray(parsed.examples),
     revision: {
       examQuestions: asStringArray(revision.exam_questions),
       flashcards: asFlashcards(revision.flashcards),

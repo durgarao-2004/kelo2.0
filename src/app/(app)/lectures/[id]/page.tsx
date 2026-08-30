@@ -37,6 +37,42 @@ function Section({ title, items }: { title: string; items: string[] }) {
   );
 }
 
+interface NoteSection {
+  heading: string;
+  points: string[];
+}
+
+function asNoteSections(value: unknown): NoteSection[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => {
+      const heading = (v as { heading?: unknown })?.heading;
+      const points = asStringList((v as { points?: unknown })?.points);
+      return typeof heading === "string" && heading.trim() && points.length > 0
+        ? { heading, points }
+        : null;
+    })
+    .filter((v): v is NoteSection => v !== null);
+}
+
+interface Definition {
+  term: string;
+  definition: string;
+}
+
+function asDefinitions(value: unknown): Definition[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => {
+      const term = (v as { term?: unknown })?.term;
+      const definition = (v as { definition?: unknown })?.definition;
+      return typeof term === "string" && typeof definition === "string" && term.trim()
+        ? { term, definition }
+        : null;
+    })
+    .filter((v): v is Definition => v !== null);
+}
+
 export default async function LectureDetailPage({
   params,
 }: {
@@ -58,6 +94,9 @@ export default async function LectureDetailPage({
         (c) => typeof c.q === "string" && typeof c.a === "string",
       )
     : [];
+  const notes = asNoteSections(summary?.notes);
+  const definitions = asDefinitions(summary?.definitions);
+  const examples = asStringList(summary?.examples);
 
   const hasAnalysis = Boolean(summary);
   const recDrive = driveLink(lecture.drive_recording_file_id);
@@ -99,7 +138,7 @@ export default async function LectureDetailPage({
               label={lecture.error ? "Retry processing" : "Transcribe & summarize"}
             />
           ) : (
-            <ProcessButton lectureId={lecture.id} label="Re-process" />
+            <ProcessButton lectureId={lecture.id} label="Re-process" force />
           )}
         </div>
       </div>
@@ -151,9 +190,36 @@ export default async function LectureDetailPage({
             </Card>
           ) : null}
 
+          {notes.length > 0 ? (
+            <Card>
+              <CardContent className="space-y-5">
+                <h2 className="text-sm font-semibold text-muted-foreground">Notes</h2>
+                {notes.map((section, i) => (
+                  <Section key={i} title={section.heading} items={section.points} />
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
+
           <Card>
             <CardContent className="space-y-5">
               <Section title="Key concepts" items={asStringList(summary?.key_concepts)} />
+              {definitions.length > 0 ? (
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold text-muted-foreground">
+                    Definitions
+                  </h3>
+                  <ul className="space-y-2 text-sm">
+                    {definitions.map((d, i) => (
+                      <li key={i}>
+                        <span className="font-medium">{d.term}:</span>{" "}
+                        <span className="text-foreground/90">{d.definition}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <Section title="Examples" items={examples} />
               <Section title="Important points" items={asStringList(summary?.important_points)} />
               <Section title="Topics" items={asStringList(summary?.topics)} />
             </CardContent>

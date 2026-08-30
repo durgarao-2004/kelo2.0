@@ -8,6 +8,9 @@ import {
   initialRecorderContext,
 } from "@/features/recording/state-machine";
 import { uploadWithRetry } from "@/features/recording/upload";
+import { drainChunkQueue, type DrainResult } from "@/features/recording/upload-queue";
+import * as chunkDb from "@/features/recording/chunk-db";
+import type { StoredSession } from "@/features/recording/chunk-db";
 import { formatDuration } from "@/lib/utils/time";
 import { Button } from "@/components/ui/button";
 
@@ -15,6 +18,16 @@ interface SubjectOption {
   id: string;
   name: string;
 }
+
+interface SessionMeta {
+  subjectId: string;
+  title: string;
+  mimeType: string;
+}
+
+type FinalizeOutcome =
+  | { ok: true; lectureId: string }
+  | { ok: false; error: string };
 
 function pickMimeType(): string {
   const candidates = [
@@ -25,6 +38,40 @@ function pickMimeType(): string {
   ];
   if (typeof MediaRecorder === "undefined") return "";
   return candidates.find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+}
+
+/** Every chunk this session has produced is uploaded independently, in
+ * order, with retry — this is what lets a 60-minute lecture survive a
+ * Wi-Fi drop instead of losing everything on one giant final upload. */
+async function drainSession(
+  sessionId: string,
+  subjectId: string,
+  title: string,
+  mimeType: string,
+): Promise<DrainResult> {
+  return drainChunkQueue(
+    {
+      getPendingChunks: () => chunkDb.getPendingChunks(sessionId),
+      markUploaded: (index) => chunkDb.markChunkUploaded(sessionId, index),
+    },
+    {
+      uploadChunk: async (chunk) => {
+        const form = new FormData();
+        form.append("index", String(chunk.index));
+        form.append("chunk", chunk.blob, `chunk-${chunk.index}`);
+        form.append("subject_id", subjectId);
+        form.append("mime_type", mimeType);
+        if (title.trim()) form.append("title", title.trim());
+        const res = await fetch(`/api/recordings/sessions/${sessionId}/chunks`, {
+          method: "POST",
+          body: form,
+        });
+        if (res.status === 409) return; // already finalized elsewhere; nothing to do
+        if (!res.ok) throw new Error(`Chunk upload failed (${res.status}).`);
+      },
+    },
+    { isOnline: () => typeof navigator === "undefined" || navigator.onLine },
+  );
 }
 
 export function Recorder({
@@ -46,6 +93,11 @@ export function Recorder({
   const [savedLectureId, setSavedLectureId] = React.useState<string | null>(null);
   const [fileExt, setFileExt] = React.useState("webm");
 
+  const [recoverable, setRecoverable] = React.useState<StoredSession | null>(null);
+  const [recovering, setRecovering] = React.useState(false);
+  const [recoverError, setRecoverError] = React.useState<string | null>(null);
+  const [recoverDoneId, setRecoverDoneId] = React.useState<string | null>(null);
+
   const recorderRef = React.useRef<MediaRecorder | null>(null);
   const streamRef = React.useRef<MediaStream | null>(null);
   const chunksRef = React.useRef<Blob[]>([]);
@@ -56,6 +108,14 @@ export function Recorder({
   const analyserRef = React.useRef<AnalyserNode | null>(null);
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const secondsRef = React.useRef(0);
+
+  const sessionIdRef = React.useRef<string | null>(null);
+  const sessionMetaRef = React.useRef<SessionMeta | null>(null);
+  const chunkIndexRef = React.useRef(0);
+  const lastChunkSavedRef = React.useRef<Promise<void>>(Promise.resolve());
+  const drainingRef = React.useRef(false);
+  const drainAgainRef = React.useRef(false);
+  const pendingRetryOnOnlineRef = React.useRef<(() => void) | null>(null);
 
   const cleanupMedia = React.useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -69,6 +129,78 @@ export function Recorder({
   }, []);
 
   React.useEffect(() => cleanupMedia, [cleanupMedia]);
+
+  // Detect a recording left over from a refresh, crash, or closed tab — it's
+  // still sitting safely in IndexedDB and just needs to finish uploading.
+  React.useEffect(() => {
+    let cancelled = false;
+    chunkDb.getRecoverableSession().then((session) => {
+      if (!cancelled && session) setRecoverable(session);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const runDrainBackground = React.useCallback((sessionId: string) => {
+    const meta = sessionMetaRef.current;
+    if (!meta) return;
+    if (drainingRef.current) {
+      drainAgainRef.current = true;
+      return;
+    }
+    drainingRef.current = true;
+    void (async () => {
+      let again = true;
+      while (again) {
+        again = false;
+        await drainSession(sessionId, meta.subjectId, meta.title, meta.mimeType);
+        if (drainAgainRef.current) {
+          drainAgainRef.current = false;
+          again = true;
+        }
+      }
+    })().finally(() => {
+      drainingRef.current = false;
+    });
+  }, []);
+
+  React.useEffect(() => {
+    function handleOnline() {
+      if (sessionIdRef.current) runDrainBackground(sessionIdRef.current);
+      const retry = pendingRetryOnOnlineRef.current;
+      if (retry) {
+        pendingRetryOnOnlineRef.current = null;
+        retry();
+      }
+    }
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, [runDrainBackground]);
+
+  // Flush whatever's been buffered since the last chunk boundary before the
+  // tab is hidden/closed, so at most a few seconds of audio are ever at risk.
+  React.useEffect(() => {
+    function flush() {
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state === "recording") {
+        try {
+          recorder.requestData();
+        } catch {
+          /* no-op: best-effort flush */
+        }
+      }
+    }
+    function onVisibility() {
+      if (document.visibilityState === "hidden") flush();
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, []);
 
   const drawWaveform = React.useCallback(() => {
     const canvas = canvasRef.current;
@@ -107,54 +239,132 @@ export function Recorder({
     }, 1000);
   }, []);
 
-  async function doUpload(blob: Blob) {
-    if (!driveConnected) {
+  /** Upload every pending chunk, then assemble + save server-side. Never
+   * resolves "ok" unless Drive actually has the file. */
+  async function drainAndFinalize(params: {
+    sessionId: string;
+    subjectId: string;
+    title: string;
+    mimeType: string;
+    elapsedSeconds: number;
+    chunkCount: number;
+  }): Promise<FinalizeOutcome> {
+    if (!driveConnected) return { ok: false, error: "drive_not_connected" };
+
+    const drain = await drainSession(
+      params.sessionId,
+      params.subjectId,
+      params.title,
+      params.mimeType,
+    );
+    if (!drain.ok) return { ok: false, error: drain.error ?? "upload_failed" };
+
+    let lectureId: string | undefined;
+    const result = await uploadWithRetry(async () => {
+      const res = await fetch(`/api/recordings/sessions/${params.sessionId}/finalize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          durationSeconds: params.elapsedSeconds,
+          chunkCount: params.chunkCount,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        missing?: number[];
+        lectureId?: string;
+      };
+      if (res.ok) {
+        lectureId = data.lectureId;
+        return;
+      }
+      if (data.error === "missing_chunks" && Array.isArray(data.missing)) {
+        // Server is missing some bytes we thought we'd sent — requeue just
+        // those and resume, rather than starting the whole upload over.
+        for (const idx of data.missing) {
+          await chunkDb.markChunkPending(params.sessionId, idx);
+        }
+        const redrain = await drainSession(
+          params.sessionId,
+          params.subjectId,
+          params.title,
+          params.mimeType,
+        );
+        if (!redrain.ok) throw new Error(redrain.error ?? "upload_failed");
+        throw new Error("resuming_after_gap");
+      }
+      if (data.error === "drive_not_connected" || data.error === "reauth_required") {
+        throw new Error("drive_not_connected");
+      }
+      throw new Error(data.error ?? `Save failed (${res.status}).`);
+    });
+
+    if (!result.ok || !lectureId) {
+      return { ok: false, error: result.error ?? "upload_failed" };
+    }
+    await chunkDb.deleteSession(params.sessionId);
+    return { ok: true, lectureId };
+  }
+
+  async function finishUpload(
+    sessionId: string,
+    subjectIdAtStart: string,
+    titleAtStart: string,
+    mimeType: string,
+    elapsedSeconds: number,
+    chunkCount: number,
+  ) {
+    dispatch({ type: "UPLOAD_START" });
+    const outcome = await drainAndFinalize({
+      sessionId,
+      subjectId: subjectIdAtStart,
+      title: titleAtStart,
+      mimeType,
+      elapsedSeconds,
+      chunkCount,
+    });
+
+    if (outcome.ok) {
+      pendingRetryOnOnlineRef.current = null;
+      setSavedLectureId(outcome.lectureId);
+      void fetch(`/api/recordings/${outcome.lectureId}/process`, { method: "POST" }).catch(
+        () => {},
+      );
+      dispatch({ type: "UPLOAD_SUCCESS" });
+      return;
+    }
+
+    if (outcome.error === "drive_not_connected") {
       setNeedsDrive(true);
       dispatch({ type: "UPLOAD_FAILURE", error: "drive_not_connected" });
       return;
     }
-    dispatch({ type: "UPLOAD_START" });
-    const form = new FormData();
-    const ext = mimeRef.current.includes("mp4") ? "m4a" : "webm";
-    form.append("audio", blob, `recording.${ext}`);
-    form.append("subject_id", subjectId);
-    form.append("duration_seconds", String(secondsRef.current));
-    if (title.trim()) form.append("title", title.trim());
 
-    const result = await uploadWithRetry(async () => {
-      const res = await fetch("/api/recordings/upload", {
-        method: "POST",
-        body: form,
+    if (outcome.error === "offline") {
+      pendingRetryOnOnlineRef.current = () =>
+        void finishUpload(sessionId, subjectIdAtStart, titleAtStart, mimeType, elapsedSeconds, chunkCount);
+      dispatch({
+        type: "UPLOAD_FAILURE",
+        error: "You’re offline. Your recording is saved on this device — it’ll upload as soon as you’re back online.",
       });
-      if (res.status === 409) {
-        setNeedsDrive(true);
-        throw Object.assign(new Error("drive_not_connected"), { fatal: true });
-      }
-      if (!res.ok) throw new Error(`Upload failed (${res.status}).`);
-      const data = (await res.json()) as { lectureId?: string };
-      if (data.lectureId) {
-        setSavedLectureId(data.lectureId);
-        // Kick off transcription/analysis in the background (safe to retry later).
-        void fetch(`/api/recordings/${data.lectureId}/process`, {
-          method: "POST",
-        }).catch(() => {});
-      }
-    });
-
-    if (result.ok) {
-      dispatch({ type: "UPLOAD_SUCCESS" });
-    } else {
-      dispatch({ type: "UPLOAD_FAILURE", error: result.error ?? "Upload failed." });
+      return;
     }
+
+    dispatch({
+      type: "UPLOAD_FAILURE",
+      error: "Upload failed. Your recording is safe on this device — tap retry.",
+    });
   }
 
   async function handleStart() {
     setNeedsDrive(false);
     setSavedLectureId(null);
     setAudioUrl(null);
+    setRecoverDoneId(null);
     chunksRef.current = [];
     secondsRef.current = 0;
     setSeconds(0);
+    chunkIndexRef.current = 0;
 
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       dispatch({ type: "ERROR", error: "Recording isn’t supported in this browser." });
@@ -166,11 +376,49 @@ export function Recorder({
       streamRef.current = stream;
       const mime = pickMimeType();
       mimeRef.current = mime;
-      setFileExt(mime.includes("mp4") ? "m4a" : "webm");
+      const ext = mime.includes("mp4") ? "m4a" : "webm";
+      setFileExt(ext);
+
+      const sessionId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      sessionIdRef.current = sessionId;
+      const trimmedTitle = title.trim();
+      sessionMetaRef.current = {
+        subjectId,
+        title: trimmedTitle,
+        mimeType: mime || "audio/webm",
+      };
+      await chunkDb.createSession({
+        id: sessionId,
+        subjectId,
+        title: trimmedTitle || null,
+        mimeType: mime || "audio/webm",
+        ext,
+        status: "recording",
+        elapsedSeconds: 0,
+        chunkCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
       const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       recorderRef.current = recorder;
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (e.data.size === 0) return;
+        chunksRef.current.push(e.data);
+        const index = chunkIndexRef.current++;
+        lastChunkSavedRef.current = chunkDb
+          .saveChunk(sessionId, index, e.data)
+          .then(() => {
+            void chunkDb.updateSessionProgress(
+              sessionId,
+              secondsRef.current,
+              chunkIndexRef.current,
+            );
+            runDrainBackground(sessionId);
+          });
       };
       recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, {
@@ -178,7 +426,23 @@ export function Recorder({
         });
         setAudioUrl(URL.createObjectURL(blob));
         dispatch({ type: "STOPPED" });
-        void doUpload(blob);
+        const totalChunks = chunkIndexRef.current;
+        const meta = sessionMetaRef.current;
+        const finalSeconds = secondsRef.current;
+        void (async () => {
+          await lastChunkSavedRef.current;
+          await chunkDb.markSessionStopped(sessionId);
+          if (meta) {
+            await finishUpload(
+              sessionId,
+              meta.subjectId,
+              meta.title,
+              meta.mimeType,
+              finalSeconds,
+              totalChunks,
+            );
+          }
+        })();
       };
       recorder.onerror = () => {
         dispatch({ type: "ERROR", error: "Recording failed unexpectedly." });
@@ -197,7 +461,10 @@ export function Recorder({
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      recorder.start(1000);
+      // 10s chunks: frequent enough that a crash loses at most ~10s of
+      // audio (less, given the visibility/pagehide flush above), coarse
+      // enough not to flood the network with tiny requests.
+      recorder.start(10000);
       dispatch({ type: "PERMISSION_GRANTED" });
       startTimer();
       drawWaveform();
@@ -232,10 +499,17 @@ export function Recorder({
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
   }
   function handleRetry() {
-    if (!audioUrl) return;
-    fetch(audioUrl)
-      .then((r) => r.blob())
-      .then((blob) => doUpload(blob));
+    const sessionId = sessionIdRef.current;
+    const meta = sessionMetaRef.current;
+    if (!sessionId || !meta) return;
+    void finishUpload(
+      sessionId,
+      meta.subjectId,
+      meta.title,
+      meta.mimeType,
+      secondsRef.current,
+      chunkIndexRef.current,
+    );
   }
   function handleReset() {
     setAudioUrl(null);
@@ -244,13 +518,100 @@ export function Recorder({
     dispatch({ type: "RESET" });
   }
 
+  async function handleRecoverFinish() {
+    if (!recoverable) return;
+    setRecovering(true);
+    setRecoverError(null);
+    const outcome = await drainAndFinalize({
+      sessionId: recoverable.id,
+      subjectId: recoverable.subjectId,
+      title: recoverable.title ?? "",
+      mimeType: recoverable.mimeType,
+      elapsedSeconds: recoverable.elapsedSeconds,
+      chunkCount: recoverable.chunkCount,
+    });
+    setRecovering(false);
+    if (outcome.ok) {
+      pendingRetryOnOnlineRef.current = null;
+      setRecoverable(null);
+      setRecoverDoneId(outcome.lectureId);
+      void fetch(`/api/recordings/${outcome.lectureId}/process`, { method: "POST" }).catch(
+        () => {},
+      );
+      return;
+    }
+    if (outcome.error === "drive_not_connected") {
+      setRecoverError(
+        "Connect Google Drive first, then try again — your recording is still safe on this device.",
+      );
+      return;
+    }
+    if (outcome.error === "offline") {
+      pendingRetryOnOnlineRef.current = () => void handleRecoverFinish();
+      setRecoverError("You’re offline. Reconnect and try again — nothing has been lost.");
+      return;
+    }
+    setRecoverError(
+      "Couldn’t finish uploading. Your recording is still safe on this device — try again.",
+    );
+  }
+
+  async function handleRecoverDiscard() {
+    if (!recoverable) return;
+    await chunkDb.deleteSession(recoverable.id);
+    setRecoverable(null);
+    setRecoverError(null);
+  }
+
   const { state, error } = ctx;
   const recording = state === "recording";
   const paused = state === "paused";
   const busy = state === "uploading" || state === "processing" || state === "stopping";
+  const idle = state === "idle" || state === "error" || state === "completed";
 
   return (
     <div className="mx-auto max-w-xl space-y-6">
+      {recoverable && idle ? (
+        <div className="space-y-3 rounded-xl border border-warning/30 bg-warning/10 p-4 text-sm">
+          <p className="font-medium">
+            We found a recording from {new Date(recoverable.createdAt).toLocaleString()} (
+            {formatDuration(recoverable.elapsedSeconds)}) that never finished uploading.
+          </p>
+          <p className="text-muted-foreground">
+            Nothing was lost — it’s still saved on this device.
+          </p>
+          {recoverError ? <p className="text-destructive">{recoverError}</p> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={handleRecoverFinish} disabled={recovering}>
+              {recovering ? (
+                <>
+                  <RefreshCw className="h-4 w-4 animate-spin" /> Finishing…
+                </>
+              ) : (
+                "Finish & save"
+              )}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={handleRecoverDiscard}
+              disabled={recovering}
+            >
+              Discard
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {recoverDoneId ? (
+        <div className="rounded-xl border border-success/30 bg-success/10 p-4 text-sm">
+          Recovered recording saved.{" "}
+          <Link href="/lectures" className="font-medium text-primary hover:underline">
+            View in lectures
+          </Link>
+        </div>
+      ) : null}
+
       <div className="space-y-3">
         <label className="block space-y-1 text-sm">
           <span className="font-medium">Subject</span>
@@ -295,7 +656,7 @@ export function Recorder({
         </div>
 
         <div className="flex items-center justify-center gap-3">
-          {state === "idle" || state === "error" || state === "completed" ? (
+          {idle ? (
             <Button
               size="lg"
               onClick={handleStart}
@@ -385,7 +746,7 @@ export function Recorder({
                 <Button size="sm" onClick={handleRetry}>
                   <RefreshCw className="h-4 w-4" /> Retry upload
                 </Button>
-                <a href={audioUrl} download="kelo-recording.webm">
+                <a href={audioUrl} download={`kelo-recording.${fileExt}`}>
                   <Button size="sm" variant="secondary">
                     <Download className="h-4 w-4" /> Download
                   </Button>

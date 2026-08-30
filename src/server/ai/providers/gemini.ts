@@ -33,6 +33,12 @@ export function makeGeminiClient(
         generationConfig: {
           temperature: req.temperature ?? 0.4,
           maxOutputTokens: req.maxTokens ?? 1024,
+          // 2.5+ Flash spends part of maxOutputTokens on hidden "thinking"
+          // tokens before any visible text — for a deterministic extraction
+          // task like ours that silently eats the whole budget and comes
+          // back with no text at all. Disable it: we need a JSON answer, not
+          // chain-of-thought.
+          thinkingConfig: { thinkingBudget: 0 },
           ...(req.json ? { responseMimeType: "application/json" } : {}),
         },
       };
