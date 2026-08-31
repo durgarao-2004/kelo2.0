@@ -90,7 +90,11 @@ vercel --prod
 - Node.js 20+ runtime (Next 16 requirement).
 - API routes that use Node crypto / large uploads run on the Node.js runtime
   (declared per-route). `maxDuration` is set on the recording upload/process
-  routes; raise it on paid plans if long lectures need more time.
+  routes, capped at 300s to stay within Vercel Hobby's hard limit (1-300s —
+  a higher value fails deployment validation, not just runtime behavior).
+  The lecture-processing pipeline is resumable, so a job that outlives one
+  request's budget is safely continued on retry. Paid plans allow a higher
+  ceiling if that resumable-retry behavior is ever not enough.
 
 ## 6. Post-deploy verification
 

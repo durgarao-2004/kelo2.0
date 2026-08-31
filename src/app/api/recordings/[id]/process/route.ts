@@ -4,8 +4,13 @@ import { toUserFacingProcessingError } from "@/lib/errors/user-facing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// Transcription (up to ~6min for a long lecture) + analysis + Drive uploads.
-export const maxDuration = 600;
+// Transcription + analysis + Drive uploads. 300 is Vercel Hobby's hard
+// ceiling for a Serverless Function's maxDuration (1-300s) — a higher value
+// here makes deployment itself fail validation, not just run slow. The
+// pipeline is resumable (see processLecture below), so a job that's still
+// running when this budget runs out is safely picked up on retry from
+// wherever it left off, rather than needing one uninterrupted request.
+export const maxDuration = 300;
 
 /**
  * Run the post-recording pipeline (transcribe → analyze → store → Drive → index)

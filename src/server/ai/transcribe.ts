@@ -19,9 +19,11 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const UPLOAD_TIMEOUT_MS = 90_000;
 const POLL_INTERVAL_MS = 3_000;
 // Long lectures can take a while to transcribe; keep this comfortably under
-// the process route's maxDuration so a slow-but-healthy job still finishes
-// instead of racing the platform's own hard timeout.
-const POLL_TIMEOUT_MS = 6 * 60_000; // 6 minutes
+// the process route's maxDuration (300s) so a slow-but-healthy job still
+// finishes instead of racing the platform's own hard timeout — this leaves
+// ~2 minutes of that budget for the download/analyze/upload/index stages
+// that run after transcription within the same request.
+const POLL_TIMEOUT_MS = 3 * 60_000; // 3 minutes
 
 /** fetch() with a hard timeout, since a hung provider must never hang the pipeline. */
 async function fetchWithTimeout(
