@@ -35,6 +35,12 @@ export default function PrivacyPage() {
               generated files to your own Drive.
             </li>
             <li>Whether you&apos;ve accepted the recording-consent notice, and when.</li>
+            <li>
+              If you turn on notifications: a push subscription (an opaque endpoint
+              URL and encryption keys assigned by your browser) tied to your
+              account, used only to deliver KELO&apos;s own notifications to that
+              device — not to identify or track you elsewhere.
+            </li>
           </ul>
         </Section>
 

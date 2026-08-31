@@ -40,6 +40,14 @@ const serverEnvSchema = z.object({
   // Resend (PIN recovery email delivery only — never used for login).
   RESEND_API_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().default("KELO <onboarding@resend.dev>"),
+
+  // Web Push (VAPID). All optional at the type level so a deployment without
+  // push configured doesn't crash unrelated routes — callers that actually
+  // need push must check they're all present (see server/push/vapid.ts).
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().optional(),
+  // Shared secret required on /api/push/dispatch (the cron-triggered sender).
+  CRON_SECRET: z.string().optional(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -86,6 +94,9 @@ export function getServerEnvDiagnostics() {
       groq: Boolean(e.GROQ_API_KEY),
     },
     resend: Boolean(e.RESEND_API_KEY),
+    push: Boolean(
+      e.NEXT_PUBLIC_VAPID_PUBLIC_KEY && e.VAPID_PRIVATE_KEY && e.VAPID_SUBJECT,
+    ),
   };
 }
 

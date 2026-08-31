@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { Plus, Pencil, Trash2, Clock, MapPin } from "lucide-react";
 import { deleteScheduleAction } from "@/server/db/actions";
 import { DAY_NAMES, formatTime12, minutesToHHMM } from "@/lib/utils/time";
@@ -35,19 +34,6 @@ export function TimetableView({
     const list = byDay.get(e.day_of_week) ?? [];
     list.push(e);
     byDay.set(e.day_of_week, list);
-  }
-
-  if (subjects.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-border p-10 text-center">
-        <p className="text-muted-foreground">
-          Add a subject first, then build your weekly timetable.
-        </p>
-        <Link href="/attendance" className="mt-3 inline-block">
-          <Button size="sm">Add a subject</Button>
-        </Link>
-      </div>
-    );
   }
 
   return (

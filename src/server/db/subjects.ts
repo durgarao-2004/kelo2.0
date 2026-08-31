@@ -31,6 +31,20 @@ export async function getSubject(
   return { data: data ?? null, error: error?.message ?? null };
 }
 
+/** Exact (trimmed) name match — mirrors the `unique(user_id, name)` constraint. */
+export async function findSubjectByName(
+  userId: string,
+  name: string,
+): Promise<DbResult<Subject | null>> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("subjects")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("name", name.trim())
+    .maybeSingle();
+  return { data: data ?? null, error: error?.message ?? null };
+}
+
 export async function createSubject(
   userId: string,
   input: {

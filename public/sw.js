@@ -37,3 +37,50 @@ self.addEventListener("fetch", (event) => {
     ),
   );
 });
+
+// ---------------------------------------------------------------------------
+// Web Push — real background notifications (see src/server/push/send.ts,
+// which is the only thing that ever sends a push, and always to this exact
+// user's own subscriptions). Payload shape: { title, body, url, tag }.
+// ---------------------------------------------------------------------------
+self.addEventListener("push", (event) => {
+  let payload = { title: "KELO", body: "" , url: "/dashboard" };
+  try {
+    if (event.data) payload = { ...payload, ...event.data.json() };
+  } catch {
+    // Malformed/empty payload — still show a minimal notification rather
+    // than silently dropping a push the user was expecting.
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(payload.title || "KELO", {
+      body: payload.body || "",
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      tag: payload.tag,
+      data: { url: payload.url || "/dashboard" },
+    }),
+  );
+});
+
+// Tapping the notification focuses an already-open KELO tab if there is one
+// (navigating it to the target page) instead of always opening a new one.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/dashboard";
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        for (const client of clients) {
+          if ("focus" in client) {
+            return client.focus().then(() => {
+              if ("navigate" in client) return client.navigate(targetUrl);
+            });
+          }
+        }
+        return self.clients.openWindow(targetUrl);
+      }),
+  );
+});

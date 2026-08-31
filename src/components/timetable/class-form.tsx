@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import {
-  createScheduleAction,
+  createClassAction,
   updateScheduleAction,
 } from "@/server/db/actions";
 import { DAY_NAMES, minutesToHHMM } from "@/lib/utils/time";
@@ -23,6 +23,19 @@ export interface ClassFormValues {
   location: string;
 }
 
+const NEW_SUBJECT = "__new__";
+
+const PALETTE = [
+  "#4f46e5",
+  "#0ea5e9",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#8b5cf6",
+  "#ec4899",
+  "#14b8a6",
+];
+
 const inputClass =
   "h-10 w-full rounded-lg border border-input bg-card px-3 text-sm outline-none focus:ring-2 focus:ring-ring";
 
@@ -38,14 +51,20 @@ export function ClassForm({
   const isEdit = Boolean(initial?.id);
   const [error, setError] = React.useState<string | null>(null);
   const [pending, startTransition] = React.useTransition();
+  const [subjectChoice, setSubjectChoice] = React.useState(
+    initial?.subject_id ?? (subjects.length === 0 ? NEW_SUBJECT : ""),
+  );
+  const [color, setColor] = React.useState(PALETTE[0]);
+  const isNewSubject = !isEdit && subjectChoice === NEW_SUBJECT;
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    if (isNewSubject) formData.set("color", color);
     startTransition(async () => {
       const res = isEdit
         ? await updateScheduleAction({}, formData)
-        : await createScheduleAction({}, formData);
+        : await createClassAction({}, formData);
       if (res.error) {
         setError(res.error);
       } else {
@@ -61,12 +80,16 @@ export function ClassForm({
       className="space-y-3 rounded-xl border border-border bg-secondary/40 p-4"
     >
       {isEdit ? <input type="hidden" name="id" value={initial?.id} /> : null}
+      {!isEdit ? (
+        <input type="hidden" name="subject_mode" value={isNewSubject ? "new" : "existing"} />
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="space-y-1 text-sm">
           <span className="font-medium">Subject</span>
           <select
             name="subject_id"
-            defaultValue={initial?.subject_id ?? ""}
+            value={subjectChoice}
+            onChange={(e) => setSubjectChoice(e.target.value)}
             required
             className={inputClass}
           >
@@ -78,6 +101,7 @@ export function ClassForm({
                 {s.name}
               </option>
             ))}
+            {!isEdit ? <option value={NEW_SUBJECT}>+ New subject…</option> : null}
           </select>
         </label>
         <label className="space-y-1 text-sm">
@@ -115,6 +139,60 @@ export function ClassForm({
           />
         </label>
       </div>
+
+      {isNewSubject ? (
+        <div className="grid gap-3 rounded-lg border border-dashed border-border p-3 sm:grid-cols-2">
+          <label className="space-y-1 text-sm">
+            <span className="font-medium">New subject name</span>
+            <input
+              name="new_subject_name"
+              required
+              placeholder="Financial Management"
+              className={inputClass}
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="font-medium">Required attendance %</span>
+            <input
+              name="target_attendance"
+              type="number"
+              min={0}
+              max={100}
+              defaultValue={75}
+              className={inputClass}
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="font-medium">Total sessions this term</span>
+            <input
+              name="total_sessions"
+              type="number"
+              min={1}
+              defaultValue={33}
+              className={inputClass}
+            />
+          </label>
+          <div className="space-y-1.5 sm:col-span-2">
+            <span className="text-sm font-medium">Color</span>
+            <div className="flex flex-wrap gap-2">
+              {PALETTE.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  aria-label={`Color ${c}`}
+                  onClick={() => setColor(c)}
+                  className="h-7 w-7 rounded-full ring-offset-2 ring-offset-background transition"
+                  style={{
+                    backgroundColor: c,
+                    boxShadow: color === c ? `0 0 0 2px hsl(var(--ring))` : undefined,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <label className="block space-y-1 text-sm">
         <span className="font-medium">Location (optional)</span>
         <input

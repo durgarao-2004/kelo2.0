@@ -15,6 +15,7 @@ import { asStringArray, asFlashcards, asDefinitions, asNoteSections } from "@/fe
 import { resumeStage, canClaim, claimStatusFor } from "@/features/ai/pipeline-stage";
 import { indexLectureChunks } from "@/server/search/index-lecture";
 import { groundLectureConcepts } from "@/server/knowledge/ground-concepts";
+import { sendPushToUser } from "@/server/push/send";
 import type { Database, Json } from "@/lib/supabase/types";
 
 // Comfortably longer than the pipeline's own transcription/analysis budgets
@@ -302,6 +303,13 @@ export async function processLecture(
       // lecture back to "recoverable".
     }
 
+    sendPushToUser(userId, {
+      title: "Lecture ready",
+      body: `${finalTitle} finished processing — transcript and summary are ready.`,
+      url: `/lectures/${lectureId}`,
+      tag: `lecture-completed-${lectureId}`,
+    }).catch(() => {});
+
     return { ok: true };
   } catch (e) {
     await db
@@ -311,6 +319,14 @@ export async function processLecture(
         error: e instanceof Error ? e.message : "processing_failed",
       })
       .eq("id", lectureId);
+
+    sendPushToUser(userId, {
+      title: "Lecture processing failed",
+      body: `${title} couldn't be processed — the recording is safe, you can retry from the lecture library.`,
+      url: `/lectures/${lectureId}`,
+      tag: `lecture-failed-${lectureId}`,
+    }).catch(() => {});
+
     return { ok: false, error: e instanceof Error ? e.message : "processing_failed" };
   }
 }

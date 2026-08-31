@@ -374,6 +374,46 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["lecture_concepts"]["Insert"]>;
         Relationships: [];
       };
+      push_subscriptions: {
+        Row: {
+          id: string;
+          user_id: string;
+          endpoint: string;
+          p256dh: string;
+          auth: string;
+          user_agent: string | null;
+          created_at: string;
+          last_seen_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          endpoint: string;
+          p256dh: string;
+          auth: string;
+          user_agent?: string | null;
+          created_at?: string;
+          last_seen_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["push_subscriptions"]["Insert"]>;
+        Relationships: [];
+      };
+      push_dedupe: {
+        Row: {
+          id: string;
+          user_id: string;
+          dedupe_key: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          dedupe_key: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["push_dedupe"]["Insert"]>;
+        Relationships: [];
+      };
       lecture_chunks: {
         Row: {
           id: string;

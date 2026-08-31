@@ -43,6 +43,38 @@ and optional model overrides `GEMINI_MODEL`, `OPENAI_MODEL`, `GROK_MODEL`,
 
 > Rotate every secret that was ever shared outside a secret manager.
 
+### Web Push (real browser/PWA notifications)
+
+Apply `supabase/migrations/0009_push_subscriptions.sql` (SQL editor, CLI, or
+psql — same as the other migrations) before this works; without it, the
+Settings notifications toggle degrades to "notifications aren't supported"
+since `getServerEnvDiagnostics().push` and the client subscribe call both
+fail closed rather than pretending to work.
+
+1. Generate a VAPID keypair: `npx web-push generate-vapid-keys`.
+2. Set `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (public), `VAPID_PRIVATE_KEY` (secret,
+   server-only), and `VAPID_SUBJECT` (a `mailto:` or `https:` contact —
+   push services may use it to reach you about a misbehaving sender).
+3. Set `CRON_SECRET` (`openssl rand -base64 32`) — authenticates the
+   `/api/push/dispatch` sweep (class reminders + attendance warnings) so it
+   can run without a signed-in user.
+4. `vercel.json` already schedules Vercel Cron to hit `/api/push/dispatch`
+   every 5 minutes; Vercel automatically sends
+   `Authorization: Bearer $CRON_SECRET` on that request. Deploying elsewhere?
+   Point any scheduler at that path with either that header or
+   `x-cron-secret: $CRON_SECRET`.
+
+Lecture-completed/failed pushes fire immediately from the processing
+pipeline (no cron involved) — only class reminders and attendance warnings
+go through the sweep, since those need to fire even when nobody is actively
+using the app at that moment.
+
+**Known limitation:** reminder timing uses the server's own clock — there is
+no per-user timezone column, so a deployment serving students across
+timezones will send reminders at the wrong local time for anyone not in the
+server's timezone. Fine for a single-region deployment; a real fix needs a
+timezone field added to the schema.
+
 ## 5. Deploy
 
 ```bash
