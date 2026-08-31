@@ -58,16 +58,31 @@ fail closed rather than pretending to work.
 3. Set `CRON_SECRET` (`openssl rand -base64 32`) — authenticates the
    `/api/push/dispatch` sweep (class reminders + attendance warnings) so it
    can run without a signed-in user.
-4. `vercel.json` already schedules Vercel Cron to hit `/api/push/dispatch`
-   every 5 minutes; Vercel automatically sends
-   `Authorization: Bearer $CRON_SECRET` on that request. Deploying elsewhere?
-   Point any scheduler at that path with either that header or
-   `x-cron-secret: $CRON_SECRET`.
+4. `vercel.json` schedules Vercel Cron to hit `/api/push/dispatch` once
+   daily (`0 6 * * *`) — **Vercel Hobby caps Cron Jobs at once per day**; a
+   more frequent schedule fails deployment validation outright, it doesn't
+   just run slower. Vercel automatically sends
+   `Authorization: Bearer $CRON_SECRET` on that request.
+
+**This means Vercel's own free cron alone gives you a once-daily sweep, not
+real-time class reminders.** That's still correct and useful for attendance
+warnings (not time-sensitive — the per-day dedupe key caps it at one per
+subject per day regardless of how often the sweep runs). It is genuinely not
+enough to catch a "class starting in 15 minutes" moment for classes spread
+across the day — no clever logic fixes that with only one sample a day, and
+this isn't a case where a bigger number would help even on a paid plan; it's
+inherent to the sampling rate. `/api/push/dispatch` is intentionally
+cadence-agnostic (idempotent per-day dedupe, and its eligibility window
+tolerates being invoked late or having runs skipped) specifically so you can
+point ANY external scheduler at it more often without touching the app:
+cron-job.org, a GitHub Actions scheduled workflow, UptimeRobot's free tier,
+etc., hitting `POST /api/push/dispatch` every ~5 minutes with header
+`x-cron-secret: $CRON_SECRET`. All free; none of them require a paid Vercel
+plan or app changes.
 
 Lecture-completed/failed pushes fire immediately from the processing
-pipeline (no cron involved) — only class reminders and attendance warnings
-go through the sweep, since those need to fire even when nobody is actively
-using the app at that moment.
+pipeline (no cron involved) — unaffected by any of the above, since those
+don't depend on a sweep at all.
 
 **Known limitation:** reminder timing uses the server's own clock — there is
 no per-user timezone column, so a deployment serving students across

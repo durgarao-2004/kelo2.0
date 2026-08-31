@@ -1,20 +1,47 @@
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { getPushConfig, sendPushToUser } from "@/server/push/send";
 import { claimPushDedupe } from "@/server/db/push";
-import { classStatus } from "@/features/timetable/overlap";
 import { computeAttendanceFromRecords } from "@/features/attendance/calc";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// How long before a class's start time it becomes eligible for a reminder.
+const REMINDER_WINDOW_MIN = 15;
+// How long AFTER a class ends we'll still bother sending a late "reminder"
+// that a sparse dispatch cadence caused us to miss, before giving up on it
+// entirely (a "starting soon" push for a class that ended hours ago would be
+// noise, not a reminder). This is what makes the sweep safe to run
+// infrequently: any run picks up everything that became due since the
+// previous one, bounded by this cutoff, instead of only the instant it
+// happens to fire at.
+const CATCH_UP_GRACE_MIN = 120;
+
 /**
  * Server-triggered notification sweep: upcoming class reminders + attendance
  * warnings, for every user, across the whole account base. There's no
  * in-process scheduler in this stack (serverless functions don't stay
- * running), so this is meant to be invoked periodically by an external
- * trigger — e.g. Vercel Cron every 5 minutes, see vercel.json — authenticated
- * with a shared secret rather than a user session, since no user is signed
- * in when it runs.
+ * running), so this is invoked by an external trigger and authenticated with
+ * a shared secret rather than a user session, since no user is signed in
+ * when it runs.
+ *
+ * CADENCE / HOBBY PLAN LIMITATION — read before changing vercel.json:
+ * Vercel Cron on the Hobby plan can run AT MOST once per day; a 5-minute
+ * schedule is rejected at deploy time. `vercel.json` therefore schedules
+ * this once daily, which is enough for the attendance-warning check (not
+ * time-of-day sensitive — the per-day dedupe key already caps it at one per
+ * subject per day no matter how often this runs) but is NOT enough for real
+ * "class starting in 15 minutes" reminders — one sample a day cannot hit a
+ * 15-minute window for classes scattered across the day. This route does not
+ * pretend otherwise: the eligibility check below is deliberately widened
+ * (REMINDER_WINDOW_MIN before start, through CATCH_UP_GRACE_MIN after end)
+ * and idempotent (claimPushDedupe, keyed per class per day) specifically so
+ * it's safe to invoke MORE often than Vercel's own cron allows, from
+ * anywhere. For real near-real-time class reminders, point a free external
+ * scheduler (e.g. cron-job.org, a GitHub Actions scheduled workflow,
+ * UptimeRobot) at this same path every ~5 minutes, authenticated with
+ * `x-cron-secret: $CRON_SECRET` — no application changes required to add
+ * that; this route is already cadence-agnostic.
  *
  * KNOWN LIMITATION: "now" is the server's own clock — there is no per-user
  * timezone column on `users`/`subjects`, so this assumes the deployment's
@@ -76,7 +103,9 @@ async function handleDispatch(request: Request) {
   const entries = (entriesRaw as unknown as ReminderEntry[] | null) ?? [];
 
   for (const e of entries) {
-    if (classStatus(e.start_minute, e.end_minute, nowMinute) !== "starting_soon") continue;
+    const dueFrom = e.start_minute - REMINDER_WINDOW_MIN;
+    const dueUntil = e.end_minute + CATCH_UP_GRACE_MIN;
+    if (nowMinute < dueFrom || nowMinute > dueUntil) continue;
     const key = `class-${e.id}-${today}`;
     const claimed = await claimPushDedupe(e.user_id, key);
     if (!claimed) continue;
@@ -85,9 +114,16 @@ async function handleDispatch(request: Request) {
       (Array.isArray(e.subject) ? e.subject[0]?.name : e.subject?.name) ?? "Class";
     const hh = String(Math.floor(e.start_minute / 60)).padStart(2, "0");
     const mm = String(e.start_minute % 60).padStart(2, "0");
+    const location = e.location ? ` · ${e.location}` : "";
+    // Only claim "starting soon" when that's still literally true — a run
+    // that only caught this late (sparse cadence) says so honestly instead
+    // of sending a "starting soon" push for a class already underway or over.
+    const stillUpcoming = nowMinute < e.start_minute;
     const result = await sendPushToUser(e.user_id, {
-      title: `${subjectName} starting soon`,
-      body: `Starts at ${hh}:${mm}${e.location ? ` · ${e.location}` : ""}`,
+      title: stillUpcoming ? `${subjectName} starting soon` : `${subjectName} today`,
+      body: stillUpcoming
+        ? `Starts at ${hh}:${mm}${location}`
+        : `Scheduled ${hh}:${mm}${location} — missed the live reminder for this one.`,
       url: "/timetable",
       tag: key,
     });
